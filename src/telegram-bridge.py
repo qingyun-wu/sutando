@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""
+Telegram bridge for Sutando — polls bot messages, writes to tasks/, sends replies from results/.
+Works alongside the voice task bridge. Runs as a background daemon.
+
+Usage: python3 src/telegram-bridge.py
+"""
+
+import json
+import os
+import time
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+try:
+    from dotenv import load_dotenv
+    load_dotenv(REPO / ".env")
+except ImportError:
+    pass  # python-dotenv not installed — token loaded from channels config below
+
+# Also load from channels config
+channels_env = Path.home() / ".claude" / "channels" / "telegram" / ".env"
+if channels_env.exists():
+    for line in channels_env.read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+if not TOKEN:
+    print("TELEGRAM_BOT_TOKEN not set")
+    exit(1)
+
+TASKS_DIR = REPO / "tasks"
+RESULTS_DIR = REPO / "results"
+TASKS_DIR.mkdir(exist_ok=True)
+RESULTS_DIR.mkdir(exist_ok=True)
+
+# Load access config
+ACCESS_FILE = Path.home() / ".claude" / "channels" / "telegram" / "access.json"
+def load_allowed():
+    try:
+        data = json.loads(ACCESS_FILE.read_text())
+        return set(data.get("allowFrom", []))
+    except:
+        return set()
+
+def api(method, **params):
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    if params:
+        data = json.dumps(params).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    else:
+        req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        print(f"API error {e.code}: {body}")
+        return {"ok": False}
+
+INBOX_DIR = REPO / "telegram-inbox"
+INBOX_DIR.mkdir(exist_ok=True)
+
+def download_file(file_id, name_hint="file"):
+    """Download a file from Telegram and save locally."""
+    result = api("getFile", file_id=file_id)
+    if not result.get("ok"):
+        return None
+    file_path = result["result"]["file_path"]
+    url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+    ext = os.path.splitext(file_path)[1] or os.path.splitext(name_hint)[1] or ""
+    local_name = f"{int(time.time()*1000)}{ext}"
+    local_path = INBOX_DIR / local_name
+    try:
+        urllib.request.urlretrieve(url, str(local_path))
+        return str(local_path)
+    except Exception as e:
+        print(f"  Download failed: {e}")
+        return None
+
+def send_file(chat_id, file_path, caption=""):
+    """Send a file via Telegram multipart upload."""
+    import mimetypes
+    mime = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    boundary = f"----sutando{int(time.time()*1000)}"
+    fname = os.path.basename(file_path)
+
+    # Determine send method based on mime type
+    if mime.startswith("image/"):
+        method, field = "sendPhoto", "photo"
+    else:
+        method, field = "sendDocument", "document"
+
+    with open(file_path, "rb") as f:
+        file_data = f.read()
+
+    body = b""
+    # File part
+    body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{fname}\"\r\nContent-Type: {mime}\r\n\r\n".encode()
+    body += file_data
+    body += b"\r\n"
+    # chat_id part
+    body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n".encode()
+    # caption part
+    if caption:
+        body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption}\r\n".encode()
+    body += f"--{boundary}--\r\n".encode()
+
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"  Send file failed: {e}")
+        return {"ok": False}
+
+def send_reply(chat_id, text):
+    import re
+    # Extract file paths: [file: /path/to/file] or [send: /path/to/file]
+    file_pattern = re.compile(r'\[(?:file|send|attach):\s*([^\]]+)\]')
+    files = file_pattern.findall(text)
+    clean_text = file_pattern.sub('', text).strip()
+
+    # Send text (if any remains after extracting file refs)
+    if clean_text:
+        for i in range(0, len(clean_text), 4000):
+            api("sendMessage", chat_id=chat_id, text=clean_text[i:i+4000])
+
+    # Send files
+    for fpath in files:
+        fpath = fpath.strip()
+        if os.path.isfile(fpath):
+            send_file(chat_id, fpath)
+            print(f"  Sent file: {fpath}")
+        else:
+            api("sendMessage", chat_id=chat_id, text=f"(file not found: {fpath})")
+
+def main():
+    print(f"Telegram bridge started. Polling for messages...")
+    offset = None
+    allowed = load_allowed()
+    pending_replies = {}  # task_id -> chat_id
+
+    while True:
+        # Poll for new messages
+        params = {"timeout": 10, "limit": 10}
+        if offset:
+            params["offset"] = offset
+        try:
+            result = api("getUpdates", **params)
+        except Exception as e:
+            print(f"[Telegram] Poll error: {e}")
+            time.sleep(5)
+            continue
+
+        if result.get("ok"):
+            for update in result.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message")
+                if not msg:
+                    continue
+
+                sender_id = str(msg["from"]["id"])
+                username = msg["from"].get("username", sender_id)
+                chat_id = msg["chat"]["id"]
+                text = msg.get("text", "")
+
+                # Reload access list periodically
+                allowed = load_allowed()
+                if sender_id not in allowed:
+                    print(f"  Dropped message from non-allowed @{username}")
+                    continue
+
+                # Handle attachments (photos, documents, voice)
+                attachment_note = ""
+                if "photo" in msg:
+                    file_id = msg["photo"][-1]["file_id"]  # largest size
+                    local_path = download_file(file_id, "photo")
+                    if local_path:
+                        attachment_note = f"\n[Photo attached: {local_path}]"
+                if "document" in msg:
+                    file_id = msg["document"]["file_id"]
+                    fname = msg["document"].get("file_name", "file")
+                    local_path = download_file(file_id, fname)
+                    if local_path:
+                        attachment_note = f"\n[File attached: {local_path}]"
+                if "voice" in msg:
+                    file_id = msg["voice"]["file_id"]
+                    local_path = download_file(file_id, "voice.ogg")
+                    if local_path:
+                        attachment_note = f"\n[Voice note attached: {local_path}]"
+
+                if not text and not attachment_note:
+                    continue
+
+                print(f"  @{username}: {text}{attachment_note}")
+
+                # Write as task (same format as voice bridge)
+                ts = int(time.time() * 1000)
+                task_id = f"task-{ts}"
+                task_file = TASKS_DIR / f"{task_id}.txt"
+                task_file.write_text(
+                    f"id: {task_id}\n"
+                    f"timestamp: {time.strftime('%Y-%m-%dT%H:%M:%S')}Z\n"
+                    f"task: [Telegram @{username}] {text}{attachment_note}\n"
+                    f"source: telegram\n"
+                    f"chat_id: {chat_id}\n"
+                )
+                pending_replies[task_id] = chat_id
+
+                # Send typing indicator
+                api("sendChatAction", chat_id=chat_id, action="typing")
+
+        # Check for results to send back
+        for task_id in list(pending_replies.keys()):
+            result_file = RESULTS_DIR / f"{task_id}.txt"
+            if result_file.exists():
+                reply_text = result_file.read_text().strip()
+                chat_id = pending_replies.pop(task_id)
+                try:
+                    send_reply(chat_id, reply_text)
+                    print(f"  Replied to {chat_id}: {reply_text[:80]}...")
+                except Exception as e:
+                    print(f"[Telegram] Reply error: {e}")
+                # Clean up
+                result_file.unlink(missing_ok=True)
+                task_file = TASKS_DIR / f"{task_id}.txt"
+                task_file.unlink(missing_ok=True)
+
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()

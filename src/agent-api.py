@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""
+Sutando agent API — simple HTTP endpoint for agent-to-agent communication.
+
+Receives tasks from other agents or services, writes them to tasks/
+for processing by the cron loop.
+
+Endpoints:
+  POST /task              — submit a task (JSON: {from, task, priority?, callback_url?})
+  GET  /result/<id>       — poll for task result
+  GET  /status            — current health + capabilities
+  GET  /ping              — alive check
+  POST /twilio/voice      — inbound call webhook (Twilio)
+  POST /twilio/sms        — inbound SMS webhook (Twilio)
+  POST /twilio/transcription — voicemail transcription callback (Twilio)
+
+Usage:
+  python3 src/agent-api.py              # start on port 7843
+  curl -X POST http://localhost:7843/task -d '{"from":"agent-2","task":"research X"}'
+  curl http://localhost:7843/result/task-123456   # poll for result
+
+Agent-to-agent:
+  POST /task with callback_url → Sutando POSTs result to that URL when done
+  Or poll GET /result/<task_id> until status="completed"
+
+Twilio setup:
+  Set webhook URL in Twilio console to https://<your-tunnel>/twilio/voice (calls)
+  and https://<your-tunnel>/twilio/sms (messages).
+
+Security: Set SUTANDO_API_TOKEN in .env for token auth (Authorization: Bearer <token>).
+For remote access: use ngrok or SSH tunnel.
+"""
+
+import http.server
+import json
+import os
+import socket
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlparse
+
+REPO_DIR = Path(__file__).parent.parent
+TASK_DIR = REPO_DIR / "tasks"
+PORT = 7843
+
+# Simple token auth — set SUTANDO_API_TOKEN in .env for remote access security
+API_TOKEN = os.environ.get("SUTANDO_API_TOKEN", "")
+
+RESULT_DIR = REPO_DIR / "results"
+TASK_DIR.mkdir(exist_ok=True)
+RESULT_DIR.mkdir(exist_ok=True)
+
+# In-memory task history (survives file cleanup, lost on restart)
+# {task_id: {status, text, time, result}}
+task_history = {}
+
+
+
+def get_status() -> dict:
+    try:
+        result = subprocess.run(
+            ["python3", str(REPO_DIR / "src/health-check.py"), "--json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        health = json.loads(result.stdout.strip())
+    except Exception:
+        health = {"error": "health check unavailable"}
+
+    return {
+        "agent": "sutando",
+        "version": "0.1.0",
+        "status": "running",
+        "health": health,
+        "capabilities": [
+            "research", "email", "calendar", "reminders", "screen-capture",
+            "browser-automation", "notes", "file-management", "code",
+            "image-generation", "translation", "contacts",
+        ],
+        "endpoints": {
+            "task": "POST /task",
+            "status": "GET /status",
+            "ping": "GET /ping",
+        },
+    }
+
+
+def get_task_result(task_id: str) -> dict | None:
+    """Check if a task result exists."""
+    result_file = RESULT_DIR / f"{task_id}.txt"
+    if result_file.exists():
+        return {"task_id": task_id, "status": "completed", "result": result_file.read_text()}
+    task_file = TASK_DIR / f"{task_id}.txt"
+    if task_file.exists():
+        return {"task_id": task_id, "status": "pending"}
+    return None
+
+
+# Store webhook callbacks for tasks
+_webhooks: dict[str, str] = {}
+
+
+def fire_webhook(task_id: str, result: str) -> None:
+    """POST result to registered webhook URL."""
+    url = _webhooks.pop(task_id, None)
+    if not url:
+        return
+    try:
+        import urllib.request
+        data = json.dumps({"task_id": task_id, "status": "completed", "result": result}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass  # Best-effort delivery
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def send_json(self, status: int, data: dict):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/ping":
+            self.send_json(200, {"pong": True})
+        elif path == "/status":
+            self.send_json(200, get_status())
+        elif path == "/tasks/active":
+            # List active tasks + system status for the web client
+            watcher_ok = subprocess.run(["pgrep", "-f", "watch-tasks"], capture_output=True).returncode == 0
+            claude_ok = subprocess.run(["pgrep", "-f", "claude.*sutando-core"], capture_output=True).returncode == 0
+            # Scan disk for active tasks, update history (preserve existing text)
+            for f in sorted(TASK_DIR.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]:
+                task_id = f.stem
+                content = f.read_text()
+                task_line = ""
+                for line in content.splitlines():
+                    if line.startswith("task:"):
+                        task_line = line[5:].strip()
+                        break
+                result_file = RESULT_DIR / f.name
+                status = "done" if result_file.exists() else "working"
+                result_text = result_file.read_text().strip() if result_file.exists() else ""
+                existing = task_history.get(task_id, {})
+                task_history[task_id] = {"status": status, "text": task_line or existing.get("text", task_id), "time": f.stat().st_mtime, "result": result_text or existing.get("result", "")}
+            # Also check for result files without task files (already cleaned up)
+            for f in sorted(RESULT_DIR.glob("task-*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)[:10]:
+                task_id = f.stem
+                if task_id not in task_history:
+                    result_content = f.read_text().strip()
+                    display_text = result_content.split('\n')[0][:80] if result_content else task_id
+                    task_history[task_id] = {"status": "done", "text": display_text, "time": f.stat().st_mtime, "result": result_content}
+                elif task_history[task_id].get("status") != "done":
+                    task_history[task_id]["status"] = "done"
+                    task_history[task_id]["result"] = f.read_text().strip()
+            # Reconcile stale entries: if task file is gone and result exists, mark done;
+            # if task file is gone, no result, and older than 5 min, remove from history
+            import time as _time
+            stale_ids = []
+            for tid, tdata in list(task_history.items()):
+                if tdata.get("status") == "working":
+                    task_file = TASK_DIR / f"{tid}.txt"
+                    result_file = RESULT_DIR / f"{tid}.txt"
+                    if result_file.exists():
+                        tdata["status"] = "done"
+                        tdata["result"] = result_file.read_text().strip()
+                    elif not task_file.exists() and _time.time() - tdata.get("time", 0) > 300:
+                        stale_ids.append(tid)
+            for tid in stale_ids:
+                del task_history[tid]
+            # Return most recent 10 from history
+            sorted_tasks = sorted(task_history.items(), key=lambda x: x[1].get("time", 0), reverse=True)[:10]
+            tasks = [{"id": tid, **tdata} for tid, tdata in sorted_tasks]
+            # Parse pending questions
+            questions = []
+            pq_file = REPO_DIR / "pending-questions.md"
+            if pq_file.exists():
+                import re
+                content = pq_file.read_text()
+                for m in re.finditer(r'## (Q\d+) — (.+?)\n\n(.+?)\n\n\*\*Status:\*\* (\w+)', content, re.DOTALL):
+                    if m.group(4) == "Waiting":
+                        questions.append({"id": m.group(1), "text": m.group(2), "detail": m.group(3).strip()[:120]})
+            self.send_json(200, {"tasks": tasks, "watcher": watcher_ok, "claude": claude_ok, "questions": questions})
+        elif path.startswith("/result/"):
+            task_id = path[len("/result/"):]
+            result = get_task_result(task_id)
+            if result:
+                self.send_json(200, result)
+            else:
+                self.send_json(404, {"error": "task not found"})
+        elif path == "/avatar":
+            avatar_file = REPO_DIR / "docs" / "stand-avatar.png"
+            if avatar_file.exists():
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(avatar_file.read_bytes())
+            else:
+                self.send_json(404, {"error": "no avatar"})
+        elif path == "/stand-identity":
+            si_file = REPO_DIR / "stand-identity.json"
+            data = json.loads(si_file.read_text()) if si_file.exists() else {}
+            self.send_json(200, data)
+        elif path == "/":
+            # Serve task submission form (works from phone on same Wi-Fi)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(TASK_FORM.encode())
+        else:
+            self.send_json(404, {"error": "not found"})
+
+    def check_auth(self) -> bool:
+        """Check API token if configured. Returns True if authorized."""
+        if not API_TOKEN:
+            return True  # No token = no auth required (local use)
+        token = self.headers.get("Authorization", "").replace("Bearer ", "")
+        if token == API_TOKEN:
+            return True
+        self.send_json(401, {"error": "unauthorized"})
+        return False
+
+    def send_twiml(self, twiml: str):
+        """Send TwiML response for Twilio webhooks."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/xml")
+        self.end_headers()
+        self.wfile.write(twiml.encode())
+
+    def handle_twilio_voice(self, form_data: dict):
+        """Handle inbound phone call from Twilio webhook."""
+        caller = form_data.get("From", ["unknown"])[0]
+        call_sid = form_data.get("CallSid", [""])[0]
+
+        # Create a task from the incoming call
+        task_id = f"task-{int(datetime.now().timestamp() * 1000)}"
+        task_content = (
+            f"id: {task_id}\n"
+            f"timestamp: {datetime.now().isoformat()}\n"
+            f"task: Incoming phone call from {caller}\n"
+            f"source: twilio_voice\n"
+            f"from: {caller}\n"
+            f"call_sid: {call_sid}\n"
+        )
+        (TASK_DIR / f"{task_id}.txt").write_text(task_content)
+
+        # TwiML: greet caller, record message
+        self.send_twiml(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            '<Say voice="alice">Hello, you\'ve reached Sutando. '
+            "Please leave a message after the tone and I will get back to you.</Say>"
+            '<Record maxLength="120" transcribe="true" '
+            f'transcribeCallback="/twilio/transcription"/>'
+            '<Say voice="alice">Thank you. Goodbye.</Say>'
+            "</Response>"
+        )
+
+    def handle_twilio_sms(self, form_data: dict):
+        """Handle inbound SMS from Twilio webhook."""
+        sender = form_data.get("From", ["unknown"])[0]
+        body = form_data.get("Body", [""])[0]
+
+        # Create a task from the SMS
+        task_id = f"task-{int(datetime.now().timestamp() * 1000)}"
+        task_content = (
+            f"id: {task_id}\n"
+            f"timestamp: {datetime.now().isoformat()}\n"
+            f"task: SMS from {sender}: {body}\n"
+            f"source: twilio_sms\n"
+            f"from: {sender}\n"
+        )
+        (TASK_DIR / f"{task_id}.txt").write_text(task_content)
+
+        # Reply with acknowledgment
+        self.send_twiml(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            "<Message>Got it. Sutando is on it.</Message>"
+            "</Response>"
+        )
+
+    def handle_twilio_transcription(self, form_data: dict):
+        """Handle voicemail transcription callback from Twilio."""
+        text = form_data.get("TranscriptionText", [""])[0]
+        caller = form_data.get("From", ["unknown"])[0]
+        if text:
+            task_id = f"task-{int(datetime.now().timestamp() * 1000)}"
+            task_content = (
+                f"id: {task_id}\n"
+                f"timestamp: {datetime.now().isoformat()}\n"
+                f"task: Voicemail from {caller}: {text}\n"
+                f"source: twilio_voicemail\n"
+                f"from: {caller}\n"
+            )
+            (TASK_DIR / f"{task_id}.txt").write_text(task_content)
+        self.send_json(200, {"ok": True})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+
+        # Twilio webhook endpoints (no auth — Twilio signs requests)
+        if path.startswith("/twilio/"):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode()
+            from urllib.parse import parse_qs
+            form_data = parse_qs(body)
+
+            if path == "/twilio/voice":
+                self.handle_twilio_voice(form_data)
+            elif path == "/twilio/sms":
+                self.handle_twilio_sms(form_data)
+            elif path == "/twilio/transcription":
+                self.handle_twilio_transcription(form_data)
+            else:
+                self.send_json(404, {"error": "not found"})
+            return
+
+        if path == "/task-done":
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                data = json.loads(body)
+                tid = data.get("taskId", "")
+                result = data.get("result", "")
+                if tid in task_history:
+                    task_history[tid]["status"] = "done"
+                    task_history[tid]["result"] = result
+                else:
+                    task_history[tid] = {"status": "done", "text": result[:80], "time": datetime.now().timestamp(), "result": result}
+                self.send_json(200, {"ok": True})
+            except:
+                self.send_json(400, {"error": "invalid"})
+            return
+
+        if path != "/task":
+            self.send_json(404, {"error": "not found"})
+            return
+
+        if not self.check_auth():
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self.send_json(400, {"error": "invalid JSON"})
+            return
+
+        from_agent = data.get("from", "unknown")
+        task = data.get("task", "")
+        priority = data.get("priority", "normal")
+
+        if not task:
+            self.send_json(400, {"error": "task is required"})
+            return
+
+        callback_url = data.get("callback_url", "")
+
+        # Write to tasks/ for sutando-core to pick up
+        task_id = f"task-{int(datetime.now().timestamp() * 1000)}"
+        task_content = f"id: {task_id}\ntimestamp: {datetime.now().isoformat()}\ntask: {task}\nsource: api\nfrom: {from_agent}\n"
+        (TASK_DIR / f"{task_id}.txt").write_text(task_content)
+
+        # Register webhook callback if provided
+        if callback_url:
+            _webhooks[task_id] = callback_url
+
+        self.send_json(200, {
+            "ok": True,
+            "task_id": task_id,
+            "result_url": f"/result/{task_id}",
+            "message": "Task accepted",
+        })
+
+
+TASK_FORM = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sutando</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,sans-serif;background:#0a0a12;color:#e8e8e8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{max-width:400px;width:100%;background:#12121e;border:1px solid #1e1e30;border-radius:12px;padding:28px}
+.header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.avatar{width:48px;height:48px;border-radius:50%;border:2px solid #4ecca3;object-fit:cover;display:none}
+h1{font-size:16px;font-weight:500;color:#fff;margin-bottom:2px}
+.sub{font-size:11px;color:#555}
+textarea{width:100%;background:#0a0a12;border:1px solid #1e1e30;border-radius:8px;padding:12px;color:#e8e8e8;font-size:14px;font-family:inherit;min-height:100px;resize:vertical;margin-bottom:16px}
+textarea:focus{outline:none;border-color:#4ecca3}
+button{width:100%;background:#1a2e24;color:#4ecca3;border:1px solid #2a4a36;border-radius:8px;padding:12px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit}
+button:hover{background:#243e30}
+.result{margin-top:16px;padding:12px;background:#0e1a14;border:1px solid #1a3a26;border-radius:8px;font-size:13px;color:#4ecca3;display:none}
+</style></head><body>
+<div class="card">
+<div class="header">
+<img class="avatar" id="avatar" src="/avatar">
+<div><h1 id="stand-name">Sutando</h1>
+<p class="sub" id="stand-sub">Send a task from any device</p></div>
+</div>
+<textarea id="task" placeholder="What do you need?"></textarea>
+<button onclick="send()">Send Task</button>
+<div class="result" id="result"></div>
+</div>
+<script>
+fetch('/stand-identity').then(r=>r.json()).then(s=>{
+  if(s.name)document.getElementById('stand-name').textContent='Sutando — '+s.name;
+  if(s.avatarGenerated)document.getElementById('avatar').style.display='block';
+}).catch(()=>{});
+async function send(){
+  const task=document.getElementById('task').value.trim();
+  if(!task)return;
+  const r=await fetch('/task',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:'mobile',task})});
+  const d=await r.json();
+  const el=document.getElementById('result');
+  el.textContent=d.ok?'Sent: '+d.task_id:'Error: '+(d.error||'unknown');
+  el.style.display='block';
+  if(d.ok)document.getElementById('task').value='';
+}
+</script></body></html>"""
+
+
+if __name__ == "__main__":
+    bind = os.environ.get("AGENT_API_BIND", "0.0.0.0")
+    server = http.server.HTTPServer((bind, PORT), Handler)
+    import socket
+    local_ip = socket.gethostbyname(socket.gethostname())
+    print(f"Sutando Agent API → http://localhost:{PORT}")
+    print(f"  POST /task  — submit a task")
+    print(f"  GET  /status — health + capabilities")
+    print(f"  GET  /ping   — alive check")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nDone.")
