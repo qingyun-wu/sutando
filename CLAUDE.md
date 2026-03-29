@@ -37,9 +37,9 @@ Read relevant memory files when user preferences or history would improve task q
 
 ## Discord access control
 
-When processing Discord tasks (source: discord), check the `user_id` field:
-- **Owner** (1022910063620390932): Full access — any task, system operations, code changes
-- **Team** (configured in memory `reference_discord_channels.md`): Read-only — answer questions, provide status, review PRs. No system mutations (no file writes, no git push, no sending messages on behalf of owner)
+When processing Discord tasks (source: discord), check the `user_id` field against the access list in memory (`reference_discord_channels.md`):
+- **Owner**: Full access — any task, system operations, code changes
+- **Team**: Read-only — answer questions, provide status, review PRs. No system mutations (no file writes, no git push, no sending messages on behalf of owner)
 - **Others**: Information only — answer questions about Sutando. No actions.
 
 If a non-owner requests a privileged action, politely decline and explain they need to ask the owner.
