@@ -171,9 +171,15 @@ const HTML = /* html */ `<!DOCTYPE html>
   .hero .avatar-hero {
     width: 80px; height: 80px; border-radius: 50%;
     border: 3px solid #4ecca3; object-fit: cover; margin-bottom: 16px; display: none;
+    transition: all 0.8s ease;
   }
-  .hero h2 { color: #fff; font-size: 1.3em; font-weight: 500; margin-bottom: 4px; }
-  .hero .tagline { color: #555; font-size: 13px; margin-bottom: 24px; }
+  .hero h2 { color: #fff; font-size: 1.3em; font-weight: 500; margin-bottom: 4px; transition: all 0.6s ease; }
+  .hero .tagline { color: #555; font-size: 13px; margin-bottom: 24px; transition: all 0.6s ease; }
+  @keyframes avatar-glow { 0% { box-shadow: 0 0 0 rgba(78,204,163,0); } 50% { box-shadow: 0 0 30px rgba(78,204,163,0.6); } 100% { box-shadow: 0 0 12px rgba(78,204,163,0.2); } }
+  @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .identity-reveal .avatar-hero { animation: avatar-glow 1.2s ease-out; }
+  .identity-reveal h2 { animation: fade-up 0.6s ease-out 0.3s both; }
+  .identity-reveal .tagline { animation: fade-up 0.6s ease-out 0.6s both; }
   .btn-hero {
     background: #1e5128; color: #fff; padding: 14px 36px; font-size: 15px; font-weight: 600;
     border: 1px solid #2a7a3a; border-radius: 14px;
@@ -230,6 +236,10 @@ fetch('http://localhost:7844/stand-identity').then(r=>r.json()).then(s=>{
   if(s.avatarGenerated){
     document.getElementById('stand-avatar').style.display='block';
     document.getElementById('hero-avatar').style.display='block';
+  }
+  if(s.name || s.avatarGenerated){
+    var hero=document.getElementById('hero');
+    if(hero) hero.classList.add('identity-reveal');
   }
 }).catch(()=>{});
 </script>
