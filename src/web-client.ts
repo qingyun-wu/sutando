@@ -177,7 +177,7 @@ const HTML = /* html */ `<!DOCTYPE html>
   .hero .tagline { color: #555; font-size: 13px; margin-bottom: 24px; transition: all 0.6s ease; }
   @keyframes avatar-glow { 0% { box-shadow: 0 0 0 rgba(78,204,163,0); } 50% { box-shadow: 0 0 30px rgba(78,204,163,0.6); } 100% { box-shadow: 0 0 12px rgba(78,204,163,0.2); } }
   @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-  .identity-reveal .avatar-hero { animation: avatar-glow 1.2s ease-out; }
+  .identity-reveal .avatar-hero { animation: avatar-glow 1.2s ease-out; opacity: 1 !important; transition: opacity 0.5s ease; }
   .identity-reveal h2 { animation: fade-up 0.6s ease-out 0.3s both; }
   .identity-reveal .tagline { animation: fade-up 0.6s ease-out 0.6s both; }
   .btn-hero {
@@ -235,11 +235,18 @@ fetch('http://localhost:7844/stand-identity').then(r=>r.json()).then(s=>{
   }
   if(s.avatarGenerated){
     document.getElementById('stand-avatar').style.display='block';
-    document.getElementById('hero-avatar').style.display='block';
+    var ha=document.getElementById('hero-avatar');
+    if(ha){ha.style.display='block';ha.style.opacity='0';}
   }
   if(s.name || s.avatarGenerated){
     var hero=document.getElementById('hero');
-    if(hero) hero.classList.add('identity-reveal');
+    if(hero){
+      requestAnimationFrame(function(){
+        hero.classList.add('identity-reveal');
+        var ha2=document.getElementById('hero-avatar');
+        if(ha2) ha2.style.opacity='1';
+      });
+    }
   }
 }).catch(()=>{});
 </script>
