@@ -7,6 +7,10 @@
 
 TASKS_DIR="${1:-$(dirname "$0")/../tasks}"
 
+# Ensure required directories exist
+mkdir -p "$TASKS_DIR"
+mkdir -p "$(dirname "$0")/../results/calls"
+
 # Wait for a new .txt file — loop until one actually appears
 while true; do
   # Check for existing files BEFORE waiting (catches files written during restarts)
