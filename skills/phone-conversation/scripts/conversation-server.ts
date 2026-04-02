@@ -348,6 +348,7 @@ function buildAgent(callSession: CallSession): MainAgent {
 			// Context only for outbound calls to owner
 			!isInbound && callSession.isOwner ? (() => { const ctx = getSafeContext(); return ctx ? `\nRecent context (for reference — use only if relevant):\n${ctx}` : ''; })() : '',
 			'Be natural, warm, and conversational. Keep responses to 1-2 sentences.',
+			'NEVER say "I\'m back", "Welcome back", "Working on it", or "task is queued". If the conversation resumes after a pause, just continue naturally from where you left off.',
 			'When the other person wants to wrap up, say a warm goodbye, then call the hang_up tool to end the call.',
 		];
 
@@ -362,7 +363,9 @@ function buildAgent(callSession: CallSession): MainAgent {
 				'',
 				'## Tools',
 				`These tools are instant (use them directly, NOT through work): ${inlineTools.map(t => t.name).join(', ')}. Use work for everything else.`,
+				'TOOL EXCLUSIVITY: If an inline tool can handle the request, use ONLY the inline tool. NEVER also call work. They are mutually exclusive — calling both causes duplicate responses. Only use work when no inline tool fits.',
 				'You can make concurrent calls — stay on the line while calling someone else.',
+				'',
 				'',
 				'## Known info',
 				(() => { try { const url = execSync('git remote get-url origin', { timeout: 2_000 }).toString().trim().replace(/\.git$/, ''); return `Sutando GitHub repo: ${url}`; } catch { return ''; } })(),
@@ -606,9 +609,11 @@ async function createCallSession(params: {
 	// Bypasses ClientTransport's internal WebSocket for lower latency
 	const sessionAny = session as any;
 	let isReplaying = false; // suppress audio during reconnect replay
+	let _isRecordingMuted: (() => boolean) | null = null;
+	import('../../../src/browser-tools.js').then(bt => { _isRecordingMuted = bt.isRecordingMuted; }).catch(() => {});
 	sessionAny.handleAudioOutput = (data: string) => {
 		sessionAny.notificationQueue?.markAudioReceived?.();
-		if (isReplaying) return; // skip replayed audio from reconnect
+		if (isReplaying || _isRecordingMuted?.()) return;
 		if (params.twilioWs.readyState === WebSocket.OPEN) {
 			const pcmBuf = Buffer.from(data, 'base64');
 			const mulawBuf = pcm24kToMulaw8k(pcmBuf);
@@ -623,6 +628,9 @@ async function createCallSession(params: {
 			}
 		}
 	};
+
+	// Set up recording hooks (tool trigger, narration push, etc)
+	import('../../../src/browser-tools.js').then(bt => bt.setupRecordingHooks(session)).catch(() => {});
 
 	// Track transcripts via event bus + run goodbye detection
 	// Use a processed count per-session that resets on reconnect to avoid duplicates.
@@ -663,6 +671,19 @@ async function createCallSession(params: {
 
 	// Trigger client connected (so VoiceSession sends greeting and starts Gemini)
 	sessionAny.handleClientConnected();
+	// Suppress greeting on reconnect — mute the first few seconds of audio after reconnect
+	let firstGreetingSent = false;
+	const origSendGreeting = sessionAny.sendGreeting?.bind(sessionAny);
+	if (origSendGreeting) {
+		sessionAny.sendGreeting = (...args: any[]) => {
+			if (firstGreetingSent) {
+				console.log(`${ts()} [Phone] suppressed reconnect greeting`);
+				return;
+			}
+			firstGreetingSent = true;
+			return origSendGreeting(...args);
+		};
+	}
 
 	// Auto-reconnect when Gemini transport closes (e.g. 1008 crash).
 	// We bypass ClientTransport, so VoiceSession's built-in reconnect won't trigger.
@@ -680,7 +701,10 @@ async function createCallSession(params: {
 					console.log(`${ts()} [Phone] reconnecting Gemini for ${callSession.callSid}`);
 					isReplaying = true; // mute audio while Gemini replays history
 					sessionAny.handleClientConnected();
-					setTimeout(() => { isReplaying = false; }, 3000); // unmute after replay
+					setTimeout(() => {
+						isReplaying = false;
+						import('../../../src/browser-tools.js').then(bt => bt.onReconnect(session)).catch(() => {});
+					}, 6000);
 				}
 			}, 1500);
 		}
@@ -698,6 +722,8 @@ function cleanupCall(callSid: string): void {
 	if (!session) return;
 	activeCalls.delete(callSid);
 	if (session.meetingId) pendingMeetingJoins.delete(session.meetingId);
+
+	import('../../../src/browser-tools.js').then(bt => bt.onCallEnd()).catch(() => {});
 
 	// Close VoiceSession
 	session.voiceSession.close('call_ended').catch(e =>
@@ -1275,8 +1301,7 @@ async function start(): Promise<void> {
 		console.log(`╠════════════════════════════════════════════════════╣`);
 		console.log(`║  Local:    http://localhost:${String(PORT).padEnd(27)}║`);
 		console.log(`║  Tunnel:   ${WEBHOOK_BASE_URL.slice(0, 40).padEnd(40)}║`);
-		const maskedPhone = TWILIO_PHONE_NUMBER ? `***${TWILIO_PHONE_NUMBER.slice(-4)}` : 'not set';
-		console.log(`║  Phone:    ${maskedPhone.padEnd(40)}║`);
+		console.log(`║  Phone:    ${TWILIO_PHONE_NUMBER.replace(/\d(?=\d{4})/g, '*').padEnd(40)}║`);
 		console.log(`╠════════════════════════════════════════════════════╣`);
 		console.log(`║  POST /call              — outbound call           ║`);
 		console.log(`║  POST /concurrent-call   — child call (for Claude) ║`);

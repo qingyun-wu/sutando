@@ -13,6 +13,10 @@ import type { ToolDefinition } from 'bodhi-realtime-agent';
 
 const ts = () => new Date().toLocaleTimeString('en-US', { hour12: false });
 
+// Re-export recording/screen tools from browser-tools (tools unique to that module)
+export { describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool } from './browser-tools.js';
+import { describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool } from './browser-tools.js';
+
 // --- Keyboard tool ---
 
 export const pressKeyTool: ToolDefinition = {
@@ -1244,7 +1248,7 @@ export const inlineTools = [
 	volumeTool, brightnessTool, clipboardTool,
 	cancelTaskTool, toggleTasksTool, getCurrentTimeTool, summonTool, dismissTool,
 	joinZoomTool, joinGmeetTool, lookupMeetingIdTool, callContactTool,
-	slideControlTool, fullscreenTool, ];
+	describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool, slideControlTool, fullscreenTool, ];
 
 /** Tools available to any caller (including unverified) */
 export const anyCallerTools = [
