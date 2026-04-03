@@ -1304,7 +1304,10 @@ function updateTabHighlights() {
     var fg = isActive ? '#ccc' : '#666';
     var border = isActive ? '#4a4a6e' : '#2a2a3e';
     if (t.id === 'questions' && questions.length > 0 && !isActive) fg = '#f0ad4e';
-    return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:4px 10px;border-radius:12px;font-size:11px;border:1px solid ' + border + ';background:' + bg + ';color:' + fg + '">' + t.label + '</span>';
+    // Fixed width per tab to prevent layout shift from badges
+    var widths = {starter:'58px',tasks:'62px',notes:'50px',questions:'82px',activity:'62px'};
+    var w = widths[t.id] || 'auto';
+    return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:4px 0;border-radius:12px;font-size:11px;border:1px solid ' + border + ';background:' + bg + ';color:' + fg + ';display:inline-block;width:' + w + ';text-align:center">' + t.label + '</span>';
   }).join('');
 }
 
