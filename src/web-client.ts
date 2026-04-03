@@ -1152,7 +1152,7 @@ function showNotesInDR() {
     var html = '<div style="max-height:400px;overflow-y:auto">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
       '<b style="font-size:14px">Notes</b>' +
-      '<span class="suggestion" onclick="window._drContent=null;updateDynamicRegion()" style="font-size:11px;cursor:pointer">Close</span></div>';
+      '<span class="suggestion" onclick="window._drContent=null;window._drLocalContent=false;updateDynamicRegion()" style="font-size:11px;cursor:pointer">Close</span></div>';
     html += notes.map(function(n){
       return '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;cursor:pointer" onclick="showNoteInDR(&quot;' + n.slug + '&quot;)">' +
         '<span style="color:#7c83ff">' + n.title + '</span>' +
@@ -1160,6 +1160,7 @@ function showNotesInDR() {
     }).join('');
     html += '</div>';
     window._drContent = {type:'html',content:html};
+    window._drLocalContent = true;
     updateDynamicRegion();
   });
 }
@@ -1184,6 +1185,7 @@ function showNoteInDR(slug) {
       '<span class="suggestion" onclick="showNotesInDR()" style="font-size:11px;cursor:pointer;margin-bottom:8px;display:inline-block">&larr; Back</span>' +
       '<div style="font-size:13px;line-height:1.5">' + text + '</div></div>';
     window._drContent = {type:'html',content:html};
+    window._drLocalContent = true;
     updateDynamicRegion();
   });
 }
@@ -1256,7 +1258,7 @@ const SUGGESTION_CHIPS = [
   {label: 'What is on my screen?'},
   {label: 'What is on my calendar today?'},
   {label: 'Take a note: my first Sutando note'},
-  {label: 'Notes', desc: 'browse saved notes', action: 'notes'},
+  {label: 'Notes'},
   {label: 'Tutorial', desc: 'walk me through what you can do'},
   {label: 'Bye', desc: 'disconnect voice'},
 ];
@@ -1363,7 +1365,10 @@ document.addEventListener('keydown', function(e) {
       fetch(API_BASE + '/dynamic-content').then(r => r.json()).catch(() => ({})),
       fetch(API_BASE + '/core-status').then(r => r.json()).catch(() => ({status:'idle'}))
     ]).then(([dc, loopData]) => {
-      window._drContent = (dc && dc.type) ? dc : null;
+      // Don't overwrite locally-set content (e.g. notes browser)
+      if (!window._drLocalContent) {
+        window._drContent = (dc && dc.type) ? dc : null;
+      }
       if (loopData.status === 'running') {
         window._drProactive = loopData.step || 'Working...';
       } else {
