@@ -6,7 +6,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, readdirSync } from 'node:fs';
+import { writeFileSync, unlinkSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { ToolDefinition } from 'bodhi-realtime-agent';
@@ -1239,13 +1239,56 @@ end tell'`, { timeout: 5_000 });
 };
 
 /** All inline tools — import and spread into your tools list */
+// ─── Notes tools ─────────────────────────────────────────
+const NOTES_DIR = join(process.cwd(), 'notes');
+
+export const listNotesTool: ToolDefinition = {
+	name: 'list_notes',
+	description: 'List all saved notes. Returns titles and slugs.',
+	parameters: z.object({}),
+	execution: 'inline',
+	async execute() {
+		try {
+			const files = readdirSync(NOTES_DIR).filter(f => f.endsWith('.md') && f !== '.gitkeep');
+			const notes = files.map(f => {
+				const content = readFileSync(join(NOTES_DIR, f), 'utf-8');
+				const titleMatch = content.match(/^title:\s*(.+)$/m);
+				return { slug: f.replace('.md', ''), title: titleMatch ? titleMatch[1].trim() : f.replace('.md', '').replace(/-/g, ' ') };
+			});
+			return { notes: notes.map(n => n.title).join(', '), count: notes.length };
+		} catch { return { notes: 'No notes found', count: 0 }; }
+	},
+};
+
+export const readNoteTool: ToolDefinition = {
+	name: 'read_note',
+	description: 'Read a specific note by name or slug. Speak the content to the user.',
+	parameters: z.object({
+		name: z.string().describe('Note name or slug to search for'),
+	}),
+	execution: 'inline',
+	async execute(args) {
+		const { name } = args as { name: string };
+		try {
+			const files = readdirSync(NOTES_DIR).filter(f => f.endsWith('.md'));
+			const query = name.toLowerCase().replace(/\s+/g, '-');
+			const match = files.find(f => f.toLowerCase().includes(query));
+			if (!match) return { error: `No note matching "${name}" found` };
+			let content = readFileSync(join(NOTES_DIR, match), 'utf-8');
+			content = content.replace(/^---[\s\S]*?---\n/, ''); // strip frontmatter
+			return { title: match.replace('.md', ''), content: content.slice(0, 2000) };
+		} catch (e) { return { error: String(e) }; }
+	},
+};
+
 export const inlineTools = [
 	pressKeyTool, scrollTool, switchTabTool, openUrlTool,
 	switchAppTool, captureScreenTool, typeTextTool,
 	volumeTool, brightnessTool, clipboardTool,
 	cancelTaskTool, toggleTasksTool, getCurrentTimeTool, summonTool, dismissTool,
 	joinZoomTool, joinGmeetTool, lookupMeetingIdTool, callContactTool,
-	describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool, slideControlTool, fullscreenTool, ];
+	describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool, slideControlTool, fullscreenTool,
+	listNotesTool, readNoteTool, ];
 
 /** Tools available to any caller (including unverified) */
 export const anyCallerTools = [
@@ -1259,6 +1302,7 @@ export const ownerOnlyTools = [
 	switchAppTool, captureScreenTool, typeTextTool,
 	clipboardTool, cancelTaskTool, toggleTasksTool, summonTool, dismissTool,
 	joinZoomTool, joinGmeetTool, callContactTool, slideControlTool, fullscreenTool,
+	listNotesTool, readNoteTool,
 ];
 
 /** Configurable tools — default to owner-only, can be opened to verified callers */
