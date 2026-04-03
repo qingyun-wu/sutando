@@ -1188,6 +1188,10 @@ function showNoteInDR(slug) {
   });
 }
 
+// Expose notes functions to global scope for onclick handlers
+window.showNotesInDR = showNotesInDR;
+window.showNoteInDR = showNoteInDR;
+
 // ─── Text input ──────────────────────────────────────────
 function sendText() {
   const input = $('textInput');
