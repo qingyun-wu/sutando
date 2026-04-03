@@ -1146,68 +1146,11 @@ function trySuggestion(el) {
   }
 }
 
-function showNotesInDR() {
-  var DASH = 'http://' + window.location.hostname + ':7844';
-  fetch(DASH + '/notes').then(function(r){return r.json()}).then(function(notes) {
-    var html = renderDRTabs() + '<div style="max-height:300px;overflow-y:auto">';
-    html += notes.map(function(n){
-      return '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;cursor:pointer" onclick="showNoteInDR(&quot;' + n.slug + '&quot;)">' +
-        '<span style="color:#7c83ff">' + n.title + '</span>' +
-        '<span style="color:#666;font-size:11px;float:right">' + new Date(n.modified*1000).toLocaleDateString() + '</span></div>';
-    }).join('');
-    html += '</div>';
-    window._drContent = {type:'html',content:html};
-    window._drLocalContent = true;
-    updateDynamicRegion();
-  });
-}
+function showNotesInDR() { switchDRTab('notes'); }
 
-function showNoteInDR(slug) {
-  var DASH = 'http://' + window.location.hostname + ':7844';
-  fetch(DASH + '/notes/' + slug).then(function(r){return r.text()}).then(function(text) {
-    // Strip frontmatter
-    text = text.replace(new RegExp('^---[\\s\\S]*?---\\n'), '');
-    // Simple markdown
-    text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    text = text.replace(/^# (.+)$/gm, '<h1 style="font-size:16px">$1</h1>');
-    var codeBlockRe = new RegExp(String.fromCharCode(96,96,96) + '([\\s\\S]*?)' + String.fromCharCode(96,96,96), 'g');
-    text = text.replace(codeBlockRe, '<pre style="background:#1a1a2e;padding:8px;border-radius:4px;font-size:12px;overflow-x:auto"><code>$1</code></pre>');
-    var inlineCodeRe = new RegExp(String.fromCharCode(96) + '([^' + String.fromCharCode(96) + ']+)' + String.fromCharCode(96), 'g');
-    text = text.replace(inlineCodeRe, '<code style="background:#1a1a2e;padding:1px 4px;border-radius:2px">$1</code>');
-    text = text.replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>');
-    text = text.replace(/^- (.+)$/gm, '<li>$1</li>');
-    text = text.replace(new RegExp('\\n\\n', 'g'), '<br><br>');
-    var html = renderDRTabs() + '<div style="max-height:300px;overflow-y:auto">' +
-      '<span class="suggestion" onclick="showNotesInDR()" style="font-size:11px;cursor:pointer;margin-bottom:8px;display:inline-block">&larr; Back</span>' +
-      '<div style="font-size:13px;line-height:1.5">' + text + '</div></div>';
-    window._drContent = {type:'html',content:html};
-    window._drLocalContent = true;
-    updateDynamicRegion();
-  });
-}
+function showNoteInDR(slug) { showNoteContent(slug); }
 
-function toggleActivity() {
-  fetch(API_BASE + '/activity').then(function(r){return r.json()}).then(function(data) {
-    var items = data.activity || [];
-    var dr = document.getElementById('dynamic-region');
-    if (!dr) return;
-    var html = renderDRTabs() + '<div style="max-height:300px;overflow-y:auto">';
-    if (items.length === 0) {
-      html += '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent activity</div>';
-    } else {
-    items.forEach(function(item) {
-      if (item.type === 'commit') {
-        html += '<div style="padding:3px 0;font-size:12px"><span style="color:#555;font-family:monospace">' + item.hash + '</span> <span style="color:#7c83ff">' + esc(item.message) + '</span></div>';
-      } else if (item.type === 'task') {
-        html += '<div style="padding:3px 0;font-size:12px;color:#4ecca3">' + esc(item.preview) + '</div>';
-      }
-    });
-    }
-    html += '</div>';
-    dr.innerHTML = html;
-  });
-}
+function toggleActivity() { switchDRTab('activity'); }
 window.toggleActivity = toggleActivity;
 
 // Expose notes functions to global scope for onclick handlers
@@ -1324,15 +1267,29 @@ function renderDynamicContent(c) {
 
 window._drActiveTab = window._drActiveTab || 'starter';
 window._drTaskCount = 0;
+window._drTabsRendered = false;
 
 function switchDRTab(tab) {
   window._drActiveTab = tab;
-  window._drLocalContent = (tab === 'notes');
-  updateDynamicRegion();
+  window._drLocalContent = true; // prevent poll from clearing content
+  updateTabHighlights();
+  renderTabContent();
 }
 window.switchDRTab = switchDRTab;
 
-function renderDRTabs() {
+function ensureTabStructure() {
+  var dr = document.getElementById('dynamic-region');
+  if (!dr) return;
+  if (!document.getElementById('dr-tabs')) {
+    dr.innerHTML = '<div id="dr-tabs" style="display:flex;gap:2px;margin-bottom:8px;flex-wrap:wrap"></div>' +
+      '<div id="dr-content" style="max-height:300px;overflow-y:auto"></div>';
+  }
+  updateTabHighlights();
+}
+
+function updateTabHighlights() {
+  var tabsEl = document.getElementById('dr-tabs');
+  if (!tabsEl) return;
   var active = window._drActiveTab;
   var questions = window._drQuestions || [];
   var taskCount = window._drTaskCount || 0;
@@ -1343,89 +1300,143 @@ function renderDRTabs() {
     {id:'questions', label:'Questions' + (questions.length > 0 ? ' (' + questions.length + ')' : '')},
     {id:'activity', label:'Activity'},
   ];
-  return '<div style="display:flex;gap:2px;margin-bottom:8px;flex-wrap:wrap">' +
-    tabs.map(function(t) {
-      var isActive = t.id === active;
-      var style = isActive
-        ? 'background:#2a2a4e;color:#ccc;border-color:#4a4a6e'
-        : 'background:transparent;color:#666;border-color:#2a2a3e';
-      var badge = (t.id === 'questions' && questions.length > 0) ? ' style="color:#f0ad4e"' : '';
-      return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:4px 10px;border-radius:12px;font-size:11px;border:1px solid;' + style + '"' + badge + '>' + t.label + '</span>';
-    }).join('') + '</div>';
+  tabsEl.innerHTML = tabs.map(function(t) {
+    var isActive = t.id === active;
+    var bg = isActive ? '#2a2a4e' : 'transparent';
+    var fg = isActive ? '#ccc' : '#666';
+    var border = isActive ? '#4a4a6e' : '#2a2a3e';
+    if (t.id === 'questions' && questions.length > 0 && !isActive) fg = '#f0ad4e';
+    return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:4px 10px;border-radius:12px;font-size:11px;border:1px solid ' + border + ';background:' + bg + ';color:' + fg + '">' + t.label + '</span>';
+  }).join('');
 }
 
-function renderStarterTab() {
-  return '<div class="dr-chips">' +
-    '<div class="suggestions-label" style="font-size:11px;color:#666;margin-bottom:4px">Try saying or typing</div>' +
-    SUGGESTION_CHIPS.map(function(c) {
-      return '<span class="suggestion" onclick="trySuggestion(this)">' +
-        c.label + (c.desc ? ' — ' + c.desc : '') + '</span>';
-    }).join('') + '</div>';
+function renderTabContent() {
+  var container = document.getElementById('dr-content');
+  if (!container) return;
+  var tab = window._drActiveTab;
+
+  if (tab === 'starter') {
+    container.innerHTML = '<div class="dr-chips">' +
+      '<div class="suggestions-label" style="font-size:11px;color:#666;margin-bottom:4px">Try saying or typing</div>' +
+      SUGGESTION_CHIPS.map(function(c) {
+        return '<span class="suggestion" onclick="trySuggestion(this)">' +
+          c.label + (c.desc ? ' — ' + c.desc : '') + '</span>';
+      }).join('') + '</div>';
+    window._drLocalContent = false;
+
+  } else if (tab === 'tasks') {
+    var taskSection = document.getElementById('tasks-section');
+    if (taskSection && taskSection.innerHTML.trim()) {
+      container.innerHTML = taskSection.innerHTML;
+    } else {
+      container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent tasks</div>';
+    }
+
+  } else if (tab === 'notes') {
+    var DASH = 'http://' + window.location.hostname + ':7844';
+    fetch(DASH + '/notes').then(function(r){return r.json()}).then(function(notes) {
+      var html = '';
+      notes.forEach(function(n) {
+        html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;cursor:pointer" onclick="showNoteContent(&quot;' + n.slug + '&quot;)">' +
+          '<span style="color:#7c83ff">' + n.title + '</span>' +
+          '<span style="color:#666;font-size:11px;float:right">' + new Date(n.modified*1000).toLocaleDateString() + '</span></div>';
+      });
+      if (!html) html = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No notes</div>';
+      container.innerHTML = html;
+    });
+
+  } else if (tab === 'questions') {
+    var questions = window._drQuestions || [];
+    if (questions.length === 0) {
+      container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No pending questions</div>';
+    } else {
+      container.innerHTML = '<div class="dr-questions">' +
+        questions.map(function(q) {
+          return '<div class="q-item"><b>' + esc(q.id) + '</b>: ' + esc(q.text) +
+            (q.detail ? '<div style="color:#999;font-size:11px;margin-top:2px;white-space:pre-wrap">' + esc(q.detail) + '</div>' : '') +
+            '<div class="q-actions">' +
+            '<button class="q-btn q-yes" data-qid="' + q.id + '" data-ans="Yes">Yes</button>' +
+            '<button class="q-btn q-no" data-qid="' + q.id + '" data-ans="No">No</button>' +
+            '<input class="q-input" data-qid="' + q.id + '" placeholder="Or type a response...">' +
+            '<button class="q-btn q-send" data-qid="' + q.id + '">Send</button>' +
+            '</div></div>';
+        }).join('') + '</div>';
+    }
+
+  } else if (tab === 'activity') {
+    fetch(API_BASE + '/activity').then(function(r){return r.json()}).then(function(data) {
+      var items = data.activity || [];
+      if (items.length === 0) {
+        container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent activity</div>';
+        return;
+      }
+      var html = '';
+      items.forEach(function(item) {
+        if (item.type === 'commit') {
+          html += '<div style="padding:3px 0;font-size:12px"><span style="color:#555;font-family:monospace">' + item.hash + '</span> <span style="color:#7c83ff">' + esc(item.message) + '</span></div>';
+        } else if (item.type === 'task') {
+          html += '<div style="padding:3px 0;font-size:12px;color:#4ecca3">' + esc(item.preview) + '</div>';
+        }
+      });
+      container.innerHTML = html;
+    });
+  }
 }
 
-function renderQuestionsTab() {
-  var questions = window._drQuestions || [];
-  if (questions.length === 0) return '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No pending questions</div>';
-  return '<div class="dr-questions">' +
-    questions.map(function(q) {
-      return '<div class="q-item"><b>' + esc(q.id) + '</b>: ' + esc(q.text) +
-        (q.detail ? '<div style="color:#999;font-size:11px;margin-top:2px;white-space:pre-wrap">' + esc(q.detail) + '</div>' : '') +
-        '<div class="q-actions">' +
-        '<button class="q-btn q-yes" data-qid="' + q.id + '" data-ans="Yes">Yes</button>' +
-        '<button class="q-btn q-no" data-qid="' + q.id + '" data-ans="No">No</button>' +
-        '<input class="q-input" data-qid="' + q.id + '" placeholder="Or type a response...">' +
-        '<button class="q-btn q-send" data-qid="' + q.id + '">Send</button>' +
-        '</div></div>';
-    }).join('') + '</div>';
+function showNoteContent(slug) {
+  var DASH = 'http://' + window.location.hostname + ':7844';
+  var container = document.getElementById('dr-content');
+  if (!container) return;
+  fetch(DASH + '/notes/' + slug).then(function(r){return r.text()}).then(function(text) {
+    text = text.replace(new RegExp('^---[\\s\\S]*?---\\n'), '');
+    text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    text = text.replace(/^# (.+)$/gm, '<h1 style="font-size:16px">$1</h1>');
+    var codeBlockRe = new RegExp(String.fromCharCode(96,96,96) + '([\\s\\S]*?)' + String.fromCharCode(96,96,96), 'g');
+    text = text.replace(codeBlockRe, '<pre style="background:#1a1a2e;padding:8px;border-radius:4px;font-size:12px;overflow-x:auto"><code>$1</code></pre>');
+    var inlineCodeRe = new RegExp(String.fromCharCode(96) + '([^' + String.fromCharCode(96) + ']+)' + String.fromCharCode(96), 'g');
+    text = text.replace(inlineCodeRe, '<code style="background:#1a1a2e;padding:1px 4px;border-radius:2px">$1</code>');
+    text = text.replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>');
+    text = text.replace(/^- (.+)$/gm, '<li>$1</li>');
+    text = text.replace(new RegExp('\\n\\n', 'g'), '<br><br>');
+    container.innerHTML = '<span class="suggestion" onclick="renderTabContent()" style="font-size:11px;cursor:pointer;margin-bottom:8px;display:inline-block">&larr; Back</span>' +
+      '<div style="font-size:13px;line-height:1.5">' + text + '</div>';
+  });
 }
+window.showNoteContent = showNoteContent;
 
 function updateDynamicRegion() {
-  const dr = document.getElementById('dynamic-region');
+  var dr = document.getElementById('dynamic-region');
   if (!dr) return;
-  // Skip re-render if user is typing in a question input
+  // Skip re-render if user is typing
   var activeInput = document.activeElement;
   if (activeInput && activeInput.classList && activeInput.classList.contains('q-input')) return;
 
-  // If API pushed real content (e.g. media), show it directly
+  // If API pushed real content (e.g. media), show it directly (no tabs)
   var content = window._drContent;
-  if (content && content.type && !content._isActivity) {
-    if (window._drLocalContent && window._drActiveTab === 'notes') {
-      // Notes content — show with tabs
-      dr.innerHTML = renderDRTabs() + renderDynamicContent(content);
-    } else if (!window._drLocalContent) {
-      dr.innerHTML = renderDynamicContent(content);
-    }
+  if (content && content.type) {
+    dr.innerHTML = renderDynamicContent(content);
     return;
   }
+
+  // Ensure tab structure exists
+  ensureTabStructure();
 
   // Auto-switch to questions tab if new questions arrive
   var questions = window._drQuestions || [];
   if (questions.length > 0 && window._drActiveTab === 'starter') {
     window._drActiveTab = 'questions';
+    updateTabHighlights();
+    renderTabContent();
+    return;
   }
 
-  // Render tabs + active tab content
-  var tabsHtml = renderDRTabs();
-  var tabContent = '';
-  switch (window._drActiveTab) {
-    case 'starter': tabContent = renderStarterTab(); break;
-    case 'tasks': tabContent = '<div id="dr-tasks-container"></div>'; break;
-    case 'notes': showNotesInDR(); return;
-    case 'questions': tabContent = renderQuestionsTab(); break;
-    case 'activity': toggleActivity(); return;
-    default: tabContent = renderStarterTab();
-  }
-  dr.innerHTML = tabsHtml + tabContent;
+  // Update tab badges (task count, question count) without re-rendering content
+  updateTabHighlights();
 
-  // For tasks tab, move the existing task list content in
-  if (window._drActiveTab === 'tasks') {
-    var taskSection = document.getElementById('tasks-section');
-    var container = document.getElementById('dr-tasks-container');
-    if (taskSection && container) {
-      container.innerHTML = taskSection.innerHTML;
-    } else {
-      container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent tasks</div>';
-    }
+  // Only render content if not locally set (user clicked a tab)
+  if (!window._drLocalContent) {
+    renderTabContent();
   }
 }
 
