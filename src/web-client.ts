@@ -1258,7 +1258,6 @@ const SUGGESTION_CHIPS = [
   {label: 'What is on my screen?'},
   {label: 'What is on my calendar today?'},
   {label: 'Take a note: my first Sutando note'},
-  {label: 'Notes'},
   {label: 'Tutorial', desc: 'walk me through what you can do'},
   {label: 'Bye', desc: 'disconnect voice'},
 ];
@@ -1335,7 +1334,9 @@ function updateDynamicRegion() {
       SUGGESTION_CHIPS.map(c =>
         '<span class="suggestion" onclick="trySuggestion(this)">' +
         c.label + (c.desc ? ' — ' + c.desc : '') + '</span>'
-      ).join('') + '</div>';
+      ).join('') +
+      '<div style="margin-top:8px"><span class="suggestion" onclick="showNotesInDR()" style="opacity:0.6">Browse Notes</span></div>' +
+      '</div>';
   }
 }
 
