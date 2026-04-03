@@ -252,30 +252,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             si_file = REPO_DIR / "stand-identity.json"
             data = json.loads(si_file.read_text()) if si_file.exists() else {}
             self.send_json(200, data)
-        elif path == "/results/recent":
-            # Recent task results — for web UI to display when voice isn't connected
-            results = []
-            try:
-                results_dir = REPO_DIR / "results"
-                # Get results from last 30 minutes
-                import time as _time
-                cutoff = _time.time() - 1800
-                for f in sorted(results_dir.glob("task-*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
-                    if f.stat().st_mtime > cutoff:
-                        content = f.read_text().strip()
-                        results.append({
-                            "id": f.stem,
-                            "content": content[:500],
-                            "timestamp": f.stat().st_mtime,
-                        })
-            except Exception:
-                pass
-            self.send_json(200, {"results": results})
         elif path == "/activity":
             # Recent activity: git commits + processed tasks
             activity = []
             try:
-                import subprocess
                 git_log = subprocess.run(
                     ["git", "-C", str(REPO_DIR), "log", "--oneline", "--since=24 hours ago", "-10"],
                     capture_output=True, text=True, timeout=5

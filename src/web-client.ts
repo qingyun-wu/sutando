@@ -1394,31 +1394,14 @@ document.addEventListener('keydown', function(e) {
   setInterval(() => {
     Promise.all([
       fetch(API_BASE + '/dynamic-content').then(r => r.json()).catch(() => ({})),
-      fetch(API_BASE + '/core-status').then(r => r.json()).catch(() => ({status:'idle'})),
-      fetch(API_BASE + '/results/recent').then(r => r.json()).catch(() => ({results:[]}))
-    ]).then(([dc, loopData, recentResults]) => {
+      fetch(API_BASE + '/core-status').then(r => r.json()).catch(() => ({status:'idle'}))
+    ]).then(([dc, loopData]) => {
       // Only overwrite content if API has real content; preserve local content (e.g. notes browser)
       if (dc && dc.type) {
         window._drContent = dc;
         window._drLocalContent = false;
       } else if (!window._drLocalContent) {
-        // Show recent results if any (and not already seen)
-        var results = (recentResults && recentResults.results) || [];
-        var lastSeen = window._lastSeenResultTs || 0;
-        var newResults = results.filter(function(r) { return r.timestamp > lastSeen; });
-        if (newResults.length > 0) {
-          var html = '<div style="max-height:300px;overflow-y:auto">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-            '<b style="font-size:14px">Task Results</b>' +
-            '<span class="suggestion" onclick="window._drContent=null;window._lastSeenResultTs=Date.now()/1000;updateDynamicRegion()" style="font-size:11px;cursor:pointer">Dismiss</span></div>';
-          newResults.forEach(function(r) {
-            html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;font-size:12px;color:#ccc;white-space:pre-wrap">' + esc(r.content) + '</div>';
-          });
-          html += '</div>';
-          window._drContent = {type:'html', content:html};
-        } else {
-          window._drContent = null;
-        }
+        window._drContent = null;
       }
       if (loopData.status === 'running') {
         window._drProactive = loopData.step || 'Working...';
