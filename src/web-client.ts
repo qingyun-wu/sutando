@@ -1282,7 +1282,7 @@ function ensureTabStructure() {
   if (!dr) return;
   if (!document.getElementById('dr-tabs')) {
     dr.innerHTML = '<div id="dr-tabs" style="display:flex;gap:2px;margin-bottom:8px"></div>' +
-      '<div id="dr-content" style="min-width:100%;max-height:40vh;overflow-y:auto;word-wrap:break-word;overflow-wrap:break-word"></div>';
+      '<div id="dr-content" style="min-width:100%;word-wrap:break-word;overflow-wrap:break-word"></div>';
   }
   updateTabHighlights();
 }
