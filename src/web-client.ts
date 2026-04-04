@@ -1367,9 +1367,10 @@ function renderTabContent() {
     fetch(DASH + '/notes').then(function(r){return r.json()}).then(function(notes) {
       var html = '';
       notes.forEach(function(n) {
-        html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;cursor:pointer" onclick="showNoteContent(&quot;' + n.slug + '&quot;)">' +
-          '<span style="color:#7c83ff">' + n.title + '</span>' +
-          '<span style="color:#666;font-size:11px;float:right">' + new Date(n.modified*1000).toLocaleDateString() + '</span></div>';
+        html += '<div style="padding:6px 0;border-bottom:1px solid #2a2a3e;display:flex;align-items:center">' +
+          '<span style="color:#7c83ff;cursor:pointer;flex:1" onclick="showNoteContent(&quot;' + n.slug + '&quot;)">' + n.title + '</span>' +
+          '<span style="color:#666;font-size:11px;margin-right:8px">' + new Date(n.modified*1000).toLocaleDateString() + '</span>' +
+          '<span style="color:#e94560;font-size:11px;cursor:pointer;opacity:0.5" onclick="event.stopPropagation();deleteNoteFromUI(&quot;' + n.slug + '&quot;)">x</span></div>';
       });
       if (!html) html = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No notes</div>';
       container.innerHTML = html;
@@ -1434,6 +1435,14 @@ function showNoteContent(slug) {
   });
 }
 window.showNoteContent = showNoteContent;
+
+function deleteNoteFromUI(slug) {
+  var DASH = 'http://' + window.location.hostname + ':7844';
+  fetch(DASH + '/notes/' + slug, {method: 'DELETE'}).then(function() {
+    renderTabContent(); // refresh notes list
+  });
+}
+window.deleteNoteFromUI = deleteNoteFromUI;
 
 function updateDynamicRegion() {
   var dr = document.getElementById('dynamic-region');

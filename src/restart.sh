@@ -1,6 +1,8 @@
 #!/bin/bash
-# Sutando restart — kills all services and restarts them.
+# Sutando restart — stops all background services, then restarts via startup.sh.
+# Does NOT touch the Claude Code CLI (core agent) — that's managed separately.
 # Usage: bash src/restart.sh
+#   --stop-only    Stop without restarting
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -17,6 +19,11 @@ pkill -f "conversation-server" 2>/dev/null
 pkill -f "credential-proxy" 2>/dev/null
 pkill -f "src/Sutando/Sutando" 2>/dev/null
 echo "  All services stopped"
+
+if [ "$1" = "--stop-only" ]; then
+    echo "Done. Run 'bash src/startup.sh' to start again."
+    exit 0
+fi
 
 sleep 1
 
