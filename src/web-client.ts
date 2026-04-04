@@ -79,10 +79,10 @@ const HTML = /* html */ `<!DOCTYPE html>
 
   /* Conversation */
   #transcript {
-    flex: 1; min-height: 200px; max-height: 50vh;
-    background: #0e0e18; border-radius: 12px; padding: 14px 16px;
-    overflow-y: auto; font-size: 14px; line-height: 1.7;
-    margin-bottom: 10px;
+    min-height: 80px; max-height: 30vh;
+    background: #0e0e18; border-radius: 12px; padding: 10px 14px;
+    overflow-y: auto; font-size: 13px; line-height: 1.6;
+    margin-bottom: 6px;
   }
   .t-entry { margin-bottom: 6px; }
   .t-user { color: #7fb3e0; }
@@ -94,11 +94,14 @@ const HTML = /* html */ `<!DOCTYPE html>
   .t-interim::before { content: 'You: '; font-weight: 600; }
 
   /* Input bar */
-  .input-bar {
-    display: flex; gap: 8px; padding: 8px 16px 12px;
+  #bottom-panel {
     position: fixed; bottom: 0; left: 0; right: 0; max-width: 480px; margin: 0 auto;
     background: #12121e; z-index: 10;
     border-top: 1px solid #1e1e30;
+    padding: 8px 16px 12px;
+  }
+  .input-bar {
+    display: flex; gap: 8px;
   }
   .input-bar input {
     flex: 1; padding: 10px 14px; border-radius: 10px;
@@ -310,6 +313,7 @@ fetch('http://localhost:7844/stand-identity').then(r=>r.json()).then(s=>{
 
 <div class="main" id="main-area">
 
+<div id="bottom-panel">
 <div id="transcript">
   <div class="t-entry t-system">Ask Sutando anything.</div>
 </div>
@@ -317,6 +321,7 @@ fetch('http://localhost:7844/stand-identity').then(r=>r.json()).then(s=>{
 <div class="input-bar">
   <input type="text" id="textInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendText()" />
   <button class="btn-send" onclick="sendText()">Send</button>
+</div>
 </div>
 
 <div id="tasks-header" style="display:none"></div>
