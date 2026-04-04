@@ -1428,9 +1428,16 @@ function updateDynamicRegion() {
   var activeInput = document.activeElement;
   if (activeInput && activeInput.classList && activeInput.classList.contains('q-input')) return;
 
-  // If API pushed real content (e.g. media), show it directly (no tabs)
+  // If API pushed real content, handle it
   var content = window._drContent;
   if (content && content.type) {
+    // View switch command from voice agent
+    if (content.type === 'view' && content.view) {
+      window._drContent = null;
+      switchDRTab(content.view);
+      return;
+    }
+    // Real media content (video, image, etc.) — show directly (no tabs)
     dr.innerHTML = renderDynamicContent(content);
     return;
   }

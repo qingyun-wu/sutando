@@ -1262,21 +1262,21 @@ end tell'`, { timeout: 5_000 });
 // ─── Notes tools ─────────────────────────────────────────
 const NOTES_DIR = join(process.cwd(), 'notes');
 
-export const listNotesTool: ToolDefinition = {
-	name: 'list_notes',
-	description: 'List all saved notes. Returns titles and slugs.',
-	parameters: z.object({}),
+export const showViewTool: ToolDefinition = {
+	name: 'show_view',
+	description: 'Switch the web UI to a specific view. Use when user says "show notes", "show tasks", "show activity", etc.',
+	parameters: z.object({
+		view: z.enum(['starter', 'tasks', 'notes', 'questions', 'activity']).describe('Which view to show'),
+	}),
 	execution: 'inline',
-	async execute() {
-		try {
-			const files = readdirSync(NOTES_DIR).filter(f => f.endsWith('.md') && f !== '.gitkeep');
-			const notes = files.map(f => {
-				const content = readFileSync(join(NOTES_DIR, f), 'utf-8');
-				const titleMatch = content.match(/^title:\s*(.+)$/m);
-				return { slug: f.replace('.md', ''), title: titleMatch ? titleMatch[1].trim() : f.replace('.md', '').replace(/-/g, ' ') };
-			});
-			return { notes: notes.map(n => n.title).join(', '), count: notes.length };
-		} catch { return { notes: 'No notes found', count: 0 }; }
+	async execute(args) {
+		const { view } = args as { view: string };
+		const dcPath = join(process.cwd(), 'dynamic-content.json');
+		writeFileSync(dcPath, JSON.stringify({ type: 'view', view }));
+		// Auto-clear after 3 seconds so it doesn't persist
+		setTimeout(() => { try { unlinkSync(dcPath); } catch {} }, 3000);
+		const labels: Record<string, string> = { starter: 'home', tasks: 'tasks', notes: 'notes', questions: 'questions', activity: 'activity' };
+		return { status: 'ok', message: `Showing ${labels[view] || view}` };
 	},
 };
 
@@ -1330,7 +1330,7 @@ export const inlineTools = [
 	cancelTaskTool, toggleTasksTool, getCurrentTimeTool, summonTool, dismissTool,
 	joinZoomTool, joinGmeetTool, lookupMeetingIdTool, callContactTool,
 	describeScreenTool, clickTool, scrollAndDescribeTool, playRecordingTool, slideControlTool, fullscreenTool,
-	listNotesTool, readNoteTool, saveNoteTool, ];
+	showViewTool, readNoteTool, saveNoteTool, ];
 
 /** Tools available to any caller (including unverified) */
 export const anyCallerTools = [
@@ -1344,7 +1344,7 @@ export const ownerOnlyTools = [
 	switchAppTool, captureScreenTool, typeTextTool,
 	clipboardTool, cancelTaskTool, toggleTasksTool, summonTool, dismissTool,
 	joinZoomTool, joinGmeetTool, callContactTool, slideControlTool, fullscreenTool,
-	listNotesTool, readNoteTool,
+	showViewTool, readNoteTool,
 ];
 
 /** Configurable tools — default to owner-only, can be opened to verified callers */
