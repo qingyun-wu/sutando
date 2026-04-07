@@ -138,6 +138,53 @@ def detect_fabrication(transcript: str) -> list[dict]:
     return issues
 
 
+def detect_reconnect_leak(transcript: str) -> list[dict]:
+    """Detect 'I'm back' reconnect leak — Gemini says this after WebSocket reconnect."""
+    issues = []
+    sutando_lines = [l for l in transcript.split('\n') if l.strip().startswith('Sutando:')]
+    for line in sutando_lines:
+        if re.search(r"I'm back|I am back|Welcome back", line, re.IGNORECASE):
+            issues.append({
+                "pattern": "reconnect_leak",
+                "severity": "medium",
+                "category": "team-fixable",
+                "summary": "Gemini said 'I'm back' after reconnect",
+                "fix_hint": "Turn-count replay detection should suppress this. Check PR #105 fix.",
+            })
+            break
+    return issues
+
+
+def detect_repeated_command(transcript: str) -> list[dict]:
+    """Detect user repeating the same command 3+ times (tool not triggering)."""
+    issues = []
+    recipient_lines = [l.split(':', 1)[1].strip().lower()
+                       for l in transcript.split('\n')
+                       if 'Recipient:' in l or 'Caller:' in l]
+    # Look for repeated summon/share screen attempts
+    summon_count = sum(1 for l in recipient_lines
+                       if any(w in l for w in ['summon', 'share screen', 'computer to zoom', 'screen to zoom']))
+    if summon_count >= 3:
+        issues.append({
+            "pattern": "repeated_summon",
+            "severity": "medium",
+            "category": "team-fixable",
+            "summary": f"User asked to summon {summon_count}x — tool may not be triggering reliably",
+            "fix_hint": "Gemini STT may garble 'summon'. Check summon tool description for speech variants.",
+        })
+    # Look for repeated tab switch attempts
+    switch_phrases = [l for l in recipient_lines if 'switch' in l or 'tab' in l or 'open the' in l]
+    if len(switch_phrases) >= 3:
+        issues.append({
+            "pattern": "repeated_tab_switch",
+            "severity": "low",
+            "category": "team-fixable",
+            "summary": f"User asked to switch tabs {len(switch_phrases)}x — fuzzy matching may be failing",
+            "fix_hint": "Check STT corrections in browser-tools.ts and tab alias list.",
+        })
+    return issues
+
+
 def detect_identity_confusion(transcript: str) -> list[dict]:
     """Detect agent identity confusion (e.g., claiming to be the owner)."""
     issues = []
@@ -159,6 +206,67 @@ def detect_identity_confusion(transcript: str) -> list[dict]:
     return issues
 
 
+def detect_recording_confusion(transcript: str) -> list[dict]:
+    """Detect recording state confusion — user thinks recording started/stopped when it didn't."""
+    issues = []
+    caller_lines = [l for l in transcript.split('\n') if 'Recipient:' in l or 'Caller:' in l]
+    recording_complaints = [l for l in caller_lines
+                            if re.search(r'not started recording|haven.t started record|still recording|stop.* record', l, re.IGNORECASE)
+                            and not re.search(r'entered any numbers|press \d|menu option', l, re.IGNORECASE)]
+    if recording_complaints:
+        issues.append({
+            "pattern": "recording_confusion",
+            "severity": "medium",
+            "category": "team-fixable",
+            "summary": f"Recording state confusion ({len(recording_complaints)} complaints)",
+            "fix_hint": "User expected recording to start/stop but it didn't. Check record tool state management.",
+        })
+    return issues
+
+
+def detect_scroll_frustration(transcript: str) -> list[dict]:
+    """Detect repeated scroll requests (3+) — scroll tool not working or wrong direction."""
+    issues = []
+    caller_lines = [l for l in transcript.split('\n') if 'Recipient:' in l or 'Caller:' in l]
+    scroll_requests = [l for l in caller_lines if re.search(r'scroll', l, re.IGNORECASE)]
+    if len(scroll_requests) >= 3:
+        # Check if user corrected direction
+        direction_change = any(re.search(r'scroll.*(up|top|down|bottom)', l, re.IGNORECASE) for l in scroll_requests)
+        issues.append({
+            "pattern": "scroll_frustration",
+            "severity": "medium",
+            "category": "team-fixable",
+            "summary": f"Scroll requested {len(scroll_requests)}x — tool may be unresponsive or wrong direction",
+            "fix_hint": "Check scroll tool execution, Gemini may be calling wrong direction or not executing.",
+        })
+    return issues
+
+
+def detect_stt_retry(transcript: str) -> list[dict]:
+    """Detect caller rephrasing the same request — likely STT garbling."""
+    issues = []
+    caller_lines = [l.split(':', 1)[1].strip().lower()
+                    for l in transcript.split('\n')
+                    if ('Recipient:' in l or 'Caller:' in l) and ':' in l]
+    retry_count = 0
+    for i in range(1, len(caller_lines)):
+        prev_words = set(caller_lines[i-1].split())
+        curr_words = set(caller_lines[i].split())
+        if len(prev_words) >= 3 and len(curr_words) >= 3:
+            overlap = len(prev_words & curr_words) / max(len(prev_words), len(curr_words))
+            if 0.3 < overlap < 0.9:  # similar but not identical = retry
+                retry_count += 1
+    if retry_count >= 2:
+        issues.append({
+            "pattern": "stt_retry",
+            "severity": "low",
+            "category": "team-fixable",
+            "summary": f"Caller rephrased {retry_count}x — possible STT recognition issues",
+            "fix_hint": "Add failing terms to vocabulary hints in system prompt (Option 1 from STT research).",
+        })
+    return issues
+
+
 # --- Scanner ---
 
 ALL_DETECTORS = [
@@ -167,7 +275,12 @@ ALL_DETECTORS = [
     detect_task_timeout,
     detect_confusion,
     detect_fabrication,
+    detect_reconnect_leak,
+    detect_repeated_command,
     detect_identity_confusion,
+    detect_recording_confusion,
+    detect_scroll_frustration,
+    detect_stt_retry,
 ]
 
 
@@ -263,5 +376,46 @@ def main():
                 print()
 
 
+def summary():
+    """Print a quality trend summary grouped by date."""
+    if not CALLS_FILE.exists():
+        print("No call logs found.")
+        return
+
+    entries = [json.loads(l) for l in CALLS_FILE.read_text().strip().split('\n') if l.strip()]
+    from collections import Counter
+
+    by_date = {}
+    for entry in entries:
+        ts = entry.get("timestamp", "")[:10]  # YYYY-MM-DD
+        if not ts:
+            continue
+        by_date.setdefault(ts, {"total": 0, "with_issues": 0, "patterns": Counter()})
+        by_date[ts]["total"] += 1
+        result = scan_entry(entry)
+        if result:
+            by_date[ts]["with_issues"] += 1
+            for issue in result["issues"]:
+                by_date[ts]["patterns"][issue["pattern"]] += 1
+
+    print("=== Call Quality Trend ===\n")
+    print(f"{'Date':<12} {'Calls':>5} {'Clean':>5} {'Issues':>6} {'Rate':>6}  Top issues")
+    print("-" * 75)
+    for date in sorted(by_date):
+        d = by_date[date]
+        clean = d["total"] - d["with_issues"]
+        rate = f"{d['with_issues']/d['total']*100:.0f}%" if d["total"] else "—"
+        top = ", ".join(f"{p}({c})" for p, c in d["patterns"].most_common(3))
+        print(f"{date:<12} {d['total']:>5} {clean:>5} {d['with_issues']:>6} {rate:>6}  {top}")
+
+    total = sum(d["total"] for d in by_date.values())
+    issues = sum(d["with_issues"] for d in by_date.values())
+    print("-" * 75)
+    print(f"{'Total':<12} {total:>5} {total-issues:>5} {issues:>6} {issues/total*100:.0f}%")
+
+
 if __name__ == "__main__":
-    main()
+    if "--summary" in sys.argv:
+        summary()
+    else:
+        main()
