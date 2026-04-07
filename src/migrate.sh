@@ -180,6 +180,11 @@ if [ -d "$BUNDLE_DIR/claude-config" ]; then
   mkdir -p "$HOME/.claude"
   [ -f "$BUNDLE_DIR/claude-config/settings.json" ] && cp "$BUNDLE_DIR/claude-config/settings.json" "$HOME/.claude/"
   [ -d "$BUNDLE_DIR/claude-config/channels" ] && cp -r "$BUNDLE_DIR/claude-config/channels" "$HOME/.claude/"
+  # On a new machine, use the discord-mini bot token (different bot per machine)
+  if [ -d "$HOME/.claude/channels/discord-mini" ] && [ -f "$HOME/.claude/channels/discord-mini/.env" ]; then
+    cp "$HOME/.claude/channels/discord-mini/.env" "$HOME/.claude/channels/discord/.env"
+    echo "  ✓ discord token swapped to Sutando-Mini"
+  fi
   [ -d "$BUNDLE_DIR/claude-config/skills" ] && cp -r "$BUNDLE_DIR/claude-config/skills" "$HOME/.claude/"
   echo "  ✓ claude config restored"
 fi
