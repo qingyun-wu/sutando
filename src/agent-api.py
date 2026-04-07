@@ -305,7 +305,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_json(200, {})
         elif path.startswith("/media/"):
             # Serve local files for dynamic region (images, audio, video, docs)
-            import mimetypes
+            # Note: mimetypes import removed — replaced by SAFE_TYPES allowlist (CodeQL #19-23 mitigation)
             rel = path[len("/media/"):]
             # Reject path traversal attempts
             if '..' in rel or rel.startswith('/') or '\x00' in rel:

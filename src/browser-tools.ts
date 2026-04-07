@@ -152,13 +152,18 @@ export const typeTextTool: ToolDefinition = {
 	execution: 'inline',
 	async execute(args) {
 		const { text } = args as { text: string };
-		const safeText = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+		// Fixes CodeQL #27 (js/command-line-injection): write to temp file instead of shell interpolation
+		const tmpFile = `/tmp/sutando-typetext-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.scpt`;
 		try {
-			execSync(`osascript -e 'tell application "System Events" to keystroke "${safeText}"'`, { timeout: 5_000 });
+			const safeText = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+			writeFileSync(tmpFile, `tell application "System Events" to keystroke "${safeText}"`);
+			execSync(`osascript ${tmpFile}`, { timeout: 5_000 });
 			console.log(`${ts()} [TypeText] typed: ${text.slice(0, 40)}`);
 			return { status: 'typed', text };
 		} catch (err) {
 			return { error: `Type failed: ${err instanceof Error ? err.message : err}` };
+		} finally {
+			try { unlinkSync(tmpFile); } catch {}
 		}
 	},
 };
