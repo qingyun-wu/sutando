@@ -97,6 +97,12 @@ async def on_ready():
 async def on_message(message):
     if message.author == client.user:
         return
+    # Skip messages from other bots (e.g. another Sutando node) to avoid
+    # double-processing in shared channels like the inter-machine bridge.
+    # EXCEPTION: if the bot @mentions this bot specifically, treat it as a
+    # legitimate cross-machine task (e.g. MacBook bot asking Mini bot to do X).
+    if message.author.bot and client.user not in message.mentions:
+        return
 
     sender_id = str(message.author.id)
     username = str(message.author)
@@ -130,6 +136,14 @@ async def on_message(message):
         if require_mention and not bot_mentioned and not role_mentioned:
             print(f"  [skip] not mentioned (requireMention=true)", flush=True)
             return
+
+        # In shared channels (require_mention=False), if there ARE other bot
+        # @mentions but THIS bot isn't mentioned, skip — let the addressed bot handle it
+        if not require_mention and message.mentions and not bot_mentioned:
+            other_bot_mentions = [m for m in message.mentions if m.bot]
+            if other_bot_mentions:
+                print(f"  [skip] message addressed to other bot(s): {[str(m) for m in other_bot_mentions]}", flush=True)
+                return
 
         # Strip mentions from the text
         text = text.replace(f"<@{client.user.id}>", "")
