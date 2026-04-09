@@ -93,8 +93,44 @@ async def on_ready():
     client.loop.create_task(poll_proactive())
 
 
+def _message_mentions_bot(message):
+    """True if this message explicitly addresses this bot via @user or
+    a role mention the bot holds. Used by both on_message and on_message_edit."""
+    if client.user in message.mentions:
+        return True
+    if message.role_mentions and message.guild:
+        if any(role.name.lower() in ("sutando", "sutando bot") for role in message.role_mentions):
+            return True
+        bot_member = message.guild.get_member(client.user.id)
+        if bot_member:
+            bot_role_ids = {r.id for r in bot_member.roles}
+            if any(r.id in bot_role_ids for r in message.role_mentions):
+                return True
+    return False
+
+
 @client.event
 async def on_message(message):
+    await _handle_discord_message(message)
+
+
+@client.event
+async def on_message_edit(before, after):
+    """Handle edited messages that add a mention the bot didn't have before.
+    Scenario: user sends a message, then edits to add @Sutando mention later.
+    Without this handler, Discord fires on_message once on CREATE and the edit
+    is invisible to the bridge."""
+    if after.author == client.user:
+        return
+    if after.author.bot and client.user not in after.mentions:
+        return
+    # Only reprocess if the edit introduced a mention that wasn't there before
+    if _message_mentions_bot(after) and not _message_mentions_bot(before):
+        print(f"  [edit] mention added to msg {after.id} — reprocessing", flush=True)
+        await _handle_discord_message(after, force=True)
+
+
+async def _handle_discord_message(message, force=False):
     if message.author == client.user:
         return
     # Skip messages from other bots (e.g. another Sutando node) to avoid
@@ -252,7 +288,44 @@ async def on_message(message):
             print(f"  Download failed: {e}")
 
     if not text and not attachment_note:
-        return
+        # Bare mention — user deliberately pinged the bot with no content.
+        # Don't drop: fetch the last few messages of channel history so the
+        # core agent can understand the implicit question (owner's model:
+        # "I asked a question, forgot to ping, then pinged as a follow-up").
+        # Without this, editing a message to add a mention OR sending a
+        # follow-up bare-ping gets silently filtered.
+        if is_dm or _message_mentions_bot(message):
+            context_lines = []
+            try:
+                async for prev in message.channel.history(limit=5, before=message):
+                    prev_author = str(prev.author)
+                    prev_content = (prev.content or "").strip()
+                    # Strip mentions so they don't pollute the context snippet
+                    for u in prev.mentions:
+                        prev_content = prev_content.replace(f"<@{u.id}>", f"@{u.name}")
+                    for r in prev.role_mentions:
+                        prev_content = prev_content.replace(f"<@&{r.id}>", f"@&{r.name}")
+                    if not prev_content and not prev.attachments:
+                        continue
+                    # Truncate each message and collapse newlines
+                    snippet = prev_content[:200].replace("\n", " ")
+                    if prev.attachments:
+                        snippet += f" [+{len(prev.attachments)} attachment(s)]"
+                    context_lines.append(f"  {prev_author}: {snippet}")
+            except Exception as e:
+                print(f"  [bare-mention] history fetch failed: {e}", flush=True)
+            if context_lines:
+                # Oldest-first for natural reading
+                context_block = "\n".join(reversed(context_lines))
+                text = (
+                    "(empty mention — treat as ping. Recent channel history "
+                    "below; look for an implicit question or task the owner "
+                    f"was waiting on a response to.)\n\nRecent messages:\n{context_block}"
+                )
+            else:
+                text = "(empty mention — treat as ping/status request)"
+        else:
+            return
 
     print(f"  @{username}: {text}{attachment_note}")
 
@@ -273,8 +346,10 @@ async def on_message(message):
         except:
             pass
 
-    # Dedup: skip if we've already processed this Discord message ID
-    if message.id in seen_message_ids:
+    # Dedup: skip if we've already processed this Discord message ID.
+    # EXCEPTION: force=True means on_message_edit is reprocessing because the
+    # edit added a new mention — re-queue even though the ID is seen.
+    if message.id in seen_message_ids and not force:
         print(f"  [dedup] skipping already-processed message {message.id} from @{username}")
         return
     seen_message_ids.add(message.id)
