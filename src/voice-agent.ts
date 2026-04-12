@@ -486,6 +486,24 @@ const mainAgent: MainAgent = {
 	// or apology loops) doesn't match. Real farewell responses to
 	// a user "bye" are almost always a short standalone line.
 	onTurnCompleted: async (ctx, _transcript) => {
+		// Clear narration speaking flag + capture what Gemini actually said
+		try {
+			const { narrationSpeakingRef, lastSpokenRef } = await import('./recording-state.js');
+			if (narrationSpeakingRef.value) {
+				narrationSpeakingRef.value = false;
+				// Capture what Gemini said so next description has real speech context
+				const turns = ctx.getRecentTurns(1) as Array<{ role?: string; content?: string }>;
+				const last = turns.find(t => t?.role === 'assistant');
+				if (last?.content) lastSpokenRef.value = last.content.trim();
+				console.log(`${ts()} [Recording] speech done — ready for next description`);
+				// If pre-captured desc is waiting, inject immediately
+				const { nextDescRef } = await import('./recording-state.js');
+				if (nextDescRef.value) {
+					const { _tryInjectNow } = await import('./recording-tools.js');
+					if (_tryInjectNow) _tryInjectNow();
+				}
+			}
+		} catch {}
 		try {
 			// getRecentTurns returns conversationContext.items directly —
 			// items have shape {role: 'assistant'|'user'|..., content: string}.
@@ -622,6 +640,15 @@ async function main() {
 		console.log(`${ts()} [NarrationTee] wired into voice agent audio output`);
 	} catch (e) {
 		console.log(`${ts()} [NarrationTee] not available: ${e instanceof Error ? e.message : e}`);
+	}
+
+	// Wire recording hooks — enables description push during scroll_and_describe
+	try {
+		const { setupRecordingHooks } = await import('./recording-tools.js');
+		setupRecordingHooks(session);
+		console.log(`${ts()} [RecordingHooks] wired into voice agent`);
+	} catch (e) {
+		console.log(`${ts()} [RecordingHooks] not available: ${e instanceof Error ? e.message : e}`);
 	}
 
 	// Watch for results from the Claude Code session and deliver to user
