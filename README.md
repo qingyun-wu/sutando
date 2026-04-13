@@ -10,9 +10,9 @@ It belongs entirely to you.
 
 > *Named after [Stands](https://jojo.fandom.com/wiki/Stand) from JoJo's Bizarre Adventure — a personal spirit that fights on your behalf. Like a Stand, Sutando starts unnamed. As it learns your style and earns real capabilities, it names itself and generates its own avatar — your Stand, unique to you.*
 
-[![▶ Sutando — Call Your Computer from Your Phone](https://img.youtube.com/vi/NC0kdpLulUY/maxresdefault.jpg)](https://youtu.be/NC0kdpLulUY)
+https://github.com/user-attachments/assets/a86ec34e-3b26-4011-824c-d2d124753c25
 
-> **▶ [Watch on YouTube](https://youtu.be/NC0kdpLulUY)** | [Download MP4](https://github.com/sonichi/sutando/releases/download/v0.1-demo/side-by-side.mp4) — 24 tool calls. 6 tasks. 7 minutes. All by voice from a phone. Demo by [@liususan091219](https://github.com/liususan091219).
+> 24 tool calls. 6 tasks. 7 minutes. All by voice from a phone. Demo by [@liususan091219](https://github.com/liususan091219). [Watch on YouTube (full quality) →](https://youtu.be/NC0kdpLulUY)
 
 📺 [Watch the vision talk at UC Berkeley →](https://youtu.be/c39fJ2WAj6A?t=7719) — the idea behind Sutando, before it existed.
 
