@@ -12,7 +12,7 @@ It belongs entirely to you.
 
 [![▶ Sutando — Call Your Computer from Your Phone](https://img.youtube.com/vi/NC0kdpLulUY/maxresdefault.jpg)](https://youtu.be/NC0kdpLulUY)
 
-> **▶ [Watch on YouTube](https://youtu.be/NC0kdpLulUY)** — 24 tool calls. 6 tasks. 7 minutes. All by voice from a phone. Demo by Susan Liu.
+> **▶ [Watch on YouTube](https://youtu.be/NC0kdpLulUY)** | [Download MP4](https://github.com/sonichi/sutando/releases/download/v0.1-demo/side-by-side.mp4) — 24 tool calls. 6 tasks. 7 minutes. All by voice from a phone. Demo by [@liususan091219](https://github.com/liususan091219).
 
 📺 [Watch the vision talk at UC Berkeley →](https://youtu.be/c39fJ2WAj6A?t=7719) — the idea behind Sutando, before it existed.
 
