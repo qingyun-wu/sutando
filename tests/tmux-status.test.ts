@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTmuxPane, _resetTmuxCacheForTests } from '../src/tmux-status.js';
+import { parseTmuxPane, readTmuxStatus, _resetTmuxCacheForTests } from '../src/tmux-status.js';
 
 /**
  * Tests for `parseTmuxPane` — the pane-capture parser used as a fallback
@@ -162,5 +162,39 @@ describe('parseTmuxPane', () => {
 		const r = parseTmuxPane(42);
 		assert.equal(r.state, 'idle');
 		assert.equal(r.label, '');
+	});
+});
+
+describe('readTmuxStatus', () => {
+	beforeEach(() => _resetTmuxCacheForTests());
+
+	it('SUTANDO_TMUX_SCRAPE=0 kill-switch → idle, no cache touch', () => {
+		const prev = process.env.SUTANDO_TMUX_SCRAPE;
+		process.env.SUTANDO_TMUX_SCRAPE = '0';
+		try {
+			const r = readTmuxStatus();
+			assert.equal(r.state, 'idle');
+			assert.equal(r.label, '');
+		} finally {
+			if (prev === undefined) delete process.env.SUTANDO_TMUX_SCRAPE;
+			else process.env.SUTANDO_TMUX_SCRAPE = prev;
+		}
+	});
+
+	it('cold-start cache miss returns idle fallback without blocking for capture timeout', () => {
+		// With cache cleared and no refresh yet complete, the sync call must
+		// return with the idle fallback WITHOUT blocking on the full
+		// execFile capture — the whole point of the async refactor. The old
+		// execSync path blocked for up to CAPTURE_TIMEOUT_MS (500ms) per
+		// call; the new path fires an async refresh and returns immediately.
+		const start = Date.now();
+		const r = readTmuxStatus();
+		const elapsed = Date.now() - start;
+		assert.equal(r.state, 'idle');
+		assert.equal(r.label, '');
+		// Threshold generous for slow CI containers. The regression-signal
+		// we care about is: if this ever climbs to ~500ms, someone
+		// accidentally reverted to the sync path.
+		assert.ok(elapsed < 300, `readTmuxStatus blocked for ${elapsed}ms (should be <300ms)`);
 	});
 });
