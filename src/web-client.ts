@@ -208,13 +208,13 @@ const HTML = /* html */ `<!DOCTYPE html>
   .hero-svg-wrap { width: 80px; height: 80px; margin-bottom: 16px; display: none; }
 
   .header .info { flex: 1; }
-  .header h1 { color: #fff; font-size: 1.1em; font-weight: 500; }
-  .header .meta { font-size: 11px; color: #555; display: flex; gap: 12px; align-items: center; margin-top: 2px; }
-  .header .meta a { color: #555; text-decoration: none; border-bottom: 1px dotted #333; }
-  .header .meta a:hover { color: #888; }
+  .header h1 { color: #fff; font-size: 1.15em; font-weight: 500; }
+  .header .meta { font-size: 16px; color: #888; display: flex; gap: 14px; align-items: center; margin-top: 4px; }
+  .header .meta a { color: #999; text-decoration: none; border-bottom: 1px dotted #555; }
+  .header .meta a:hover { color: #bbb; }
   .status-pill {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 12px; font-size: 16px; font-weight: 500;
   }
   .status-pill.voice-on { background: #1a2e24; color: #4ecca3; }
   .status-pill.voice-off { background: #1a1a2e; color: #666; }
@@ -249,10 +249,10 @@ const HTML = /* html */ `<!DOCTYPE html>
   #transcript {
     min-height: 80px; max-height: 30vh;
     background: #0e0e18; border-radius: 12px; padding: 10px 14px;
-    overflow-y: auto; font-size: 13px; line-height: 1.6;
+    overflow-y: auto; font-size: 16px; line-height: 1.6;
     margin-bottom: 6px;
   }
-  .t-entry { margin-bottom: 6px; position: relative; user-select: text; }
+  .t-entry { margin-bottom: 8px; position: relative; user-select: text; }
   .t-entry .copy-btn {
     display: none; position: absolute; right: 0; top: 0;
     background: #1e1e30; border: 1px solid #2a2a40; color: #666; font-size: 10px;
@@ -264,8 +264,8 @@ const HTML = /* html */ `<!DOCTYPE html>
   .t-user::before { content: 'You: '; font-weight: 600; color: #5a9fd4; }
   .t-assistant { color: #a8d8b0; }
   .t-assistant::before { content: 'Sutando: '; font-weight: 600; color: #6dbe82; }
-  .t-system { color: #666; font-size: 12px; }
-  .t-interim { color: #7fb3e0; opacity: 0.5; font-size: 13px; }
+  .t-system { color: #888; font-size: 14px; }
+  .t-interim { color: #7fb3e0; opacity: 0.5; font-size: 16px; }
   .t-interim::before { content: 'You: '; font-weight: 600; }
 
   /* Input bar */
@@ -279,8 +279,8 @@ const HTML = /* html */ `<!DOCTYPE html>
     display: flex; gap: 8px;
   }
   .input-bar input {
-    flex: 1; padding: 10px 14px; border-radius: 10px;
-    border: 1px solid #1e1e30; background: #0e0e18; color: #fff; font-size: 13px;
+    flex: 1; padding: 12px 16px; border-radius: 10px;
+    border: 1px solid #1e1e30; background: #0e0e18; color: #fff; font-size: 16px;
     outline: none;
   }
   .input-bar input:focus { border-color: #4ecca3; }
@@ -295,38 +295,48 @@ const HTML = /* html */ `<!DOCTYPE html>
   }
   #tasks:empty { display: none; }
   .task-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 5px 0; border-bottom: 1px solid #141420;
+    display: flex; align-items: center; gap: 13px;
+    padding: 15px 10px; margin: 0 -10px; border-bottom: 1px solid #141420;
+    transition: background 0.12s; border-radius: 6px;
   }
   .task-item:last-child { border-bottom: none; }
+  .task-item:hover { background: #1a1a2a; cursor: pointer; }
+  .note-item:hover { background: #1a1a2a; }
   .task-status {
-    width: 16px; height: 16px; border-radius: 50%;
+    width: 22px; height: 22px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-size: 9px; flex-shrink: 0;
+    font-size: 12px; flex-shrink: 0;
   }
   .task-status.working { background: #1e3a5f; color: #60a5fa; animation: pulse 1.5s infinite; }
   .task-status.done { background: #1e4028; color: #4ecca3; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-  .task-text { color: #888; flex: 1; word-break: break-word; }
-  .task-time { color: #444; font-size: 10px; }
+  .task-text { color: #d0d0d8; flex: 1; word-break: break-word; font-size: 16px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-text.expanded { white-space: normal; }
+  .task-time { color: #777; font-size: 13px; flex-shrink: 0; }
+  .task-expand {
+    flex-shrink: 0; padding: 5px 12px; border-radius: 12px;
+    background: #2a4060; color: #d8e8f8; font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 1px solid #3a5075; user-select: none;
+  }
+  .task-expand:hover { background: #3a5075; color: #ffffff; }
 
   /* Dynamic region */
-  #dynamic-region { padding: 0 16px 8px; width: 100%; box-sizing: border-box; user-select: text; -webkit-user-select: text; }
+  #dynamic-region { padding: 26px 16px 8px; width: 100%; box-sizing: border-box; user-select: text; -webkit-user-select: text; }
   #dynamic-region:empty { display: none; }
-  #core-status-bar { font-size: 11px; color: #555; }
+  #core-status-bar { font-size: 16px; color: #888; }
   #core-status-bar:empty { display: none; }
   #core-status-bar .core-running { color: #4ecca3; }
   #core-status-bar .core-idle { color: #444; }
   #dynamic-region .dr-questions {
     background: linear-gradient(135deg, #1e1a12, #2a2218); border: 1px solid #f0ad4e44;
-    border-radius: 10px; padding: 12px 16px; font-size: 13px; box-shadow: 0 0 12px #f0ad4e22;
+    border-radius: 10px; padding: 14px 18px; font-size: 16px; box-shadow: 0 0 12px #f0ad4e22;
   }
-  #dynamic-region .dr-questions .q-title { color: #f0ad4e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-  #dynamic-region .dr-questions .q-item { color: #ddd; padding: 8px 0; border-bottom: 1px solid #2e281844; }
+  #dynamic-region .dr-questions .q-title { color: #f0ad4e; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  #dynamic-region .dr-questions .q-item { color: #ddd; padding: 10px 0; border-bottom: 1px solid #2e281844; }
   #dynamic-region .dr-questions .q-item:last-child { border-bottom: none; }
-  #dynamic-region .q-actions { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  #dynamic-region .q-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   #dynamic-region .q-btn {
-    padding: 4px 14px; border-radius: 14px; font-size: 11px; cursor: pointer;
+    padding: 6px 16px; border-radius: 14px; font-size: 15px; cursor: pointer;
     border: 1px solid #2e2818; background: #1e1a12; color: #ccc; transition: all 0.15s;
   }
   #dynamic-region .q-btn:hover { background: #2e2818; border-color: #f0ad4e66; }
@@ -335,16 +345,16 @@ const HTML = /* html */ `<!DOCTYPE html>
   #dynamic-region .q-btn.q-no { border-color: #e9456066; color: #e94560; }
   #dynamic-region .q-btn.q-no:hover { background: #3a1520; }
   #dynamic-region .q-input {
-    flex: 1; min-width: 120px; padding: 4px 10px; border-radius: 14px; font-size: 11px;
+    flex: 1; min-width: 120px; padding: 6px 12px; border-radius: 14px; font-size: 15px;
     border: 1px solid #2e2818; background: #12100a; color: #ccc; outline: none;
   }
   #dynamic-region .q-input:focus { border-color: #f0ad4e66; }
-  #dynamic-region .dr-proactive { text-align: center; padding: 8px; font-size: 13px; color: #8899a6; }
+  #dynamic-region .dr-proactive { text-align: center; padding: 10px; font-size: 16px; color: #a8b8c6; }
   #dynamic-region .dr-chips { text-align: center; }
-  #dynamic-region .dr-chips .suggestions-label { margin-bottom: 6px; }
+  #dynamic-region .dr-chips .suggestions-label { margin-bottom: 8px; }
   #dynamic-region .dr-chips .suggestion {
     display: inline-block; background: #1a1a2e; border: 1px solid #2a2a4e;
-    border-radius: 16px; padding: 6px 14px; margin: 3px; font-size: 11px;
+    border-radius: 16px; padding: 7px 15px; margin: 4px; font-size: 15px;
     color: #8899a6; cursor: pointer; transition: all 0.2s;
   }
   #dynamic-region .dr-chips .suggestion:hover { background: #2a2a4e; color: #ccc; border-color: #4a4a6e; }
@@ -357,7 +367,7 @@ const HTML = /* html */ `<!DOCTYPE html>
   #dynamic-region .dr-document {
     background: #12121e; border: 1px solid #1e1e30; border-radius: 10px; padding: 12px 16px;
   }
-  #dynamic-region .dr-doc-body { color: #bbb; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+  #dynamic-region .dr-doc-body { color: #ccc; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
 
   /* Section labels */
   .section-label {
@@ -396,7 +406,7 @@ const HTML = /* html */ `<!DOCTYPE html>
 
   /* Hidden URL input */
   #wsUrl { display: none; }
-  .stats { font-size: 10px; color: #444; }
+  .stats { font-size: 14px; color: #777; }
 
   /* Hero connect screen — shown when voice is disconnected */
   .hero {
@@ -585,13 +595,13 @@ fetch('http://localhost:7844/stand-identity').then(r=>r.json()).then(s=>{
   <button class="btn-hero" onclick="toggle()">Start Voice</button>
 </div>
 
-<div id="status-bar" style="text-align:center;font-size:11px;color:#556;letter-spacing:0.5px;padding:12px 16px">
-  <kbd style="background:#1a1a2e;padding:2px 6px;border-radius:3px;border:1px solid #333;font-family:monospace;color:#8af">⌃C</kbd> drop context
-  <span style="margin:0 6px;color:#333">|</span>
-  <kbd style="background:#1a1a2e;padding:2px 6px;border-radius:3px;border:1px solid #333;font-family:monospace;color:#8af">⌃V</kbd> voice
-  <span style="margin:0 6px;color:#333">|</span>
-  <kbd style="background:#1a1a2e;padding:2px 6px;border-radius:3px;border:1px solid #333;font-family:monospace;color:#8af">⌃M</kbd> mute
-  <span style="margin:0 6px;color:#333">|</span>
+<div id="status-bar" style="text-align:center;font-size:16px;color:#888;letter-spacing:0.3px;padding:12px 16px">
+  <kbd style="background:#1a1a2e;padding:3px 8px;border-radius:4px;border:1px solid #333;font-family:monospace;color:#8af;font-size:14px">⌃C</kbd> drop context
+  <span style="margin:0 8px;color:#444">|</span>
+  <kbd style="background:#1a1a2e;padding:3px 8px;border-radius:4px;border:1px solid #333;font-family:monospace;color:#8af;font-size:14px">⌃V</kbd> voice
+  <span style="margin:0 8px;color:#444">|</span>
+  <kbd style="background:#1a1a2e;padding:3px 8px;border-radius:4px;border:1px solid #333;font-family:monospace;color:#8af;font-size:14px">⌃M</kbd> mute
+  <span style="margin:0 8px;color:#444">|</span>
   <span id="core-status-bar" style="display:inline"></span>
 </div>
 
@@ -869,16 +879,20 @@ function updateTask(taskId, status, text, result) {
   taskMap[taskId] = { status, text: text || existing.text, time: new Date(), result: result || existing.result || '' };
   // Auto-switch to tasks tab if new task arrives and user is on starter
   if (isNew && window._drActiveTab === 'starter') { switchDRTab('tasks'); }
-  // Auto-expand the latest completed task (collapse others if user had collapsed)
-  if (status === 'done' && !wasDone && (result || existing.result)) {
-    if (userCollapsed) expandedTasks.clear(); // keep old ones collapsed
+  // Auto-expand ONLY ongoing tasks (working/pending) so the user sees progress.
+  // Done tasks stay collapsed by default — user clicks the "Show details" chip.
+  if (status === 'working' && !expandedTasks.has(taskId)) {
     expandedTasks.add(taskId);
-    userCollapsed = false;
-    setTimeout(() => { const el = document.getElementById('result-' + taskId); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+  }
+  // When a task transitions done, auto-collapse — UNLESS the user manually
+  // expanded it (userExpanded set). Prevents the "2s flash then close" bug.
+  if (status === 'done' && !wasDone && !userExpanded.has(taskId)) {
+    expandedTasks.delete(taskId);
   }
   renderTasks();
 }
 const expandedTasks = window.expandedTasks = new Set();
+const userExpanded = window.userExpanded = new Set(); // user-initiated expands — never auto-collapse these
 let userCollapsed = false; // user manually collapsed — suppress auto-expand
 // Listen for external collapse/expand commands (from inline tools via AppleScript)
 new MutationObserver(() => {
@@ -886,7 +900,7 @@ new MutationObserver(() => {
   if (document.body.dataset.taskAction === 'expand') { Object.keys(taskMap).forEach(id => { if (taskMap[id].result) expandedTasks.add(id); }); userCollapsed = false; renderTasks(); document.body.dataset.taskAction = ''; }
 }).observe(document.body, { attributes: true, attributeFilter: ['data-task-action'] });
 function toggleResult(taskId) {
-  if (expandedTasks.has(taskId)) { expandedTasks.delete(taskId); } else { expandedTasks.add(taskId); userCollapsed = false; }
+  if (expandedTasks.has(taskId)) { expandedTasks.delete(taskId); userExpanded.delete(taskId); } else { expandedTasks.add(taskId); userExpanded.add(taskId); userCollapsed = false; }
   const el = document.getElementById('result-' + taskId);
   if (el) el.style.display = expandedTasks.has(taskId) ? 'block' : 'none';
 }
@@ -905,6 +919,46 @@ document.addEventListener('click', function(e) {
   const item = e.target.closest && e.target.closest('.task-item[data-taskid]');
   if (item) toggleResult(item.dataset.taskid);
 });
+// Collapse routing prefixes to a short category badge + clause head.
+// "[Discord @susanliu_] maybe make it look more like this, add emoji in front"
+//   → "[Discord] maybe make it look more like this"
+// Keeps the origin channel visible per Susan's 16:53 ask while still
+// dropping the noisy handle+replyTo+file-attached chunks.
+// NOTE: regex literals live inside the HTML template string — single \ is
+// eaten by the template literal parser (so /\s+/g turns into /s+/g in the
+// browser and strips s characters!). Double-escape every backslash.
+function summarizeTaskText(raw) {
+  if (!raw) return '';
+  let s = String(raw).trim();
+  // Collapse "[Discord @handle]" → "[Discord]", "[Voice foo]" → "[Voice]", etc.
+  // Iterate because a task may have multiple stacked prefixes.
+  for (let i = 0; i < 4; i++) {
+    const before = s;
+    s = s.replace(/^\\[(Discord|Voice|Replying to|Reply|Phone|Sutando-core|Sutando-Lucy|Sutando-Maddy|Task|Context drop)[^\\]]*\\]\\s*/i, function(_, kind) {
+      var k = kind.toLowerCase();
+      var short = k === 'replying to' || k === 'reply' ? 'Reply'
+                : k === 'sutando-core' ? 'Sutando-core'
+                : k === 'sutando-lucy' ? 'Sutando-Lucy'
+                : k === 'sutando-maddy' ? 'Sutando-Maddy'
+                : k === 'context drop' ? 'Context drop'
+                : kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase();
+      return '[' + short + '] ';
+    });
+    if (s === before) break;
+  }
+  // Strip inline "[File attached: ...]" chunks anywhere in the text.
+  s = s.replace(/\\[File attached:[^\\]]*\\]/gi, '').replace(/\\s+/g, ' ').trim();
+  // Now cut at first strong boundary to keep the head of the first sentence.
+  const cuts = [' (', ' — ', ' - ', ': ', '. ', ', '];
+  for (const c of cuts) {
+    const idx = s.indexOf(c);
+    if (idx > 0 && idx < 90) { s = s.slice(0, idx); break; }
+  }
+  // Final safety: never let a single phrase exceed ~85 chars
+  if (s.length > 85) s = s.slice(0, 82) + '…';
+  return s;
+}
+
 function renderTasks() {
   const container = $('tasks');
   const entries = Object.entries(taskMap);
@@ -921,11 +975,18 @@ function renderTasks() {
     const clickAttr = hasResult ? ' data-taskid="' + id + '" style="cursor:pointer"' : '';
     const isExpanded = expandedTasks.has(id);
     const resultDisplay = isExpanded ? 'block' : 'none';
-    const resultHtml = hasResult ? '<div id="result-' + id + '" style="display:' + resultDisplay + ';padding:6px 26px;color:#8ab4c8;font-size:11px;white-space:pre-wrap;word-break:break-word;background:#0d1520;border-radius:6px;margin:4px 0 4px 26px">' + t.result.replace(/</g,'&lt;') + '</div>' : '';
+    const resultHtml = hasResult ? '<div id="result-' + id + '" style="display:' + resultDisplay + ';padding:8px 12px;color:#b8c8d8;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#0d1520;border-radius:8px;margin:4px 0 6px 30px">' + t.result.replace(/</g,'&lt;') + '</div>' : '';
+    const rawText = t.text || id;
+    // Default-tag bare tasks (no [Channel] prefix) as [Sutando-core].
+    const taggedRaw = /^\\[/.test(rawText) ? rawText : '[Sutando-core] ' + rawText;
+    const displayText = isExpanded ? taggedRaw : summarizeTaskText(taggedRaw);
+    const textClass = isExpanded ? 'task-text expanded' : 'task-text';
+    const expandChip = hasResult ? '<span class="task-expand">' + (isExpanded ? 'Hide ▾' : 'Show details ▸') + '</span>' : '';
     return '<div class="task-item"' + clickAttr + '>' +
       '<div class="task-status ' + t.status + '">' + (icons[t.status] || '?') + '</div>' +
-      '<span class="task-text">' + (t.text || id) + (hasResult ? (isExpanded ? ' ▾' : ' ▸') : '') + '</span>' +
+      '<span class="' + textClass + '">' + displayText + '</span>' +
       '<span class="task-time">' + timeStr + '</span>' +
+      expandChip +
       '</div>' + resultHtml;
   }).join('');
 }
@@ -966,11 +1027,13 @@ function startTaskPolling() {
         if (t.status === 'done' && existing.status && existing.status !== 'done') {
           showToast('<span class="toast-label">Done</span> ' + (t.text || t.id).slice(0, 60));
         }
-        // Auto-expand latest completed task (collapse others if user had collapsed)
-        if (t.status === 'done' && existing.status !== 'done' && (t.result || existing.result)) {
-          if (userCollapsed) expandedTasks.clear();
+        // Auto-expand ONLY working tasks (progress visibility). Done = collapse,
+        // unless the user manually expanded it via the chip (userExpanded set).
+        if (t.status === 'working' && !expandedTasks.has(t.id)) {
           expandedTasks.add(t.id);
-          userCollapsed = false;
+        }
+        if (t.status === 'done' && existing.status !== 'done' && !userExpanded.has(t.id)) {
+          expandedTasks.delete(t.id);
         }
         taskMap[t.id] = { status: t.status, text: t.text, time: new Date(t.time * 1000), result: t.result || existing.result || '' };
       }
@@ -1922,7 +1985,7 @@ function updateTabHighlights() {
     var border = isActive ? '#4a4a6e' : '#2a2a3e';
     if (t.id === 'questions' && questions.length > 0 && !isActive) fg = '#f0ad4e';
     if (t.id === 'tasks' && hasNewTasks && !isActive) fg = '#4ecca3';
-    return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:4px 0;border-radius:12px;font-size:11px;border:1px solid ' + border + ';background:' + bg + ';color:' + fg + ';flex:1;text-align:center">' + t.label + '</span>';
+    return '<span onclick="switchDRTab(&quot;' + t.id + '&quot;)" style="cursor:pointer;padding:6px 0;border-radius:12px;font-size:14px;border:1px solid ' + border + ';background:' + bg + ';color:' + fg + ';flex:1;text-align:center">' + t.label + '</span>';
   }).join('');
 }
 
@@ -1932,16 +1995,24 @@ function renderTabContent() {
   var tab = window._drActiveTab;
 
   if (tab === 'starter') {
+    // Cap at 5 chips per Susan's "show fewer cards rather than shrink" rule.
+    // Also cap each chip's visible label at ~32 chars so "PR 470 — task-card
+    // redesign" stays terse — full text still available via title tooltip.
     container.innerHTML = '<div class="dr-chips">' +
-      '<div class="suggestions-label" style="font-size:11px;color:#666;margin-bottom:4px">Try saying or typing</div>' +
-      getSuggestionChips().map(function(c) {
-        return '<span class="suggestion" onclick="trySuggestion(this)">' +
-          c.label + (c.desc ? ' — ' + c.desc : '') + '</span>';
+      '<div class="suggestions-label" style="font-size:14px;color:#999;margin-bottom:28px">Try saying or typing</div>' +
+      getSuggestionChips().slice(0, 5).map(function(c) {
+        var full = c.label + (c.desc ? ' — ' + c.desc : '');
+        var short = full.length > 32 ? full.slice(0, 30) + '…' : full;
+        return '<span class="suggestion" title="' + esc(full) + '" onclick="trySuggestion(this)">' +
+          esc(short) + '</span>';
       }).join('') + '</div>';
     window._drLocalContent = false;
 
   } else if (tab === 'tasks') {
-    // Render tasks directly from taskMap
+    // Render tasks using the shared .task-item classes + renderTasks()
+    // template (summarizeTaskText / userExpanded / hover / 18px). Previous
+    // inline-styled path was dead-code that bypassed all CSS work — see
+    // Maddy's 2026-04-19 16:07 ET root-cause writeup.
     var entries = Object.entries(taskMap);
     if (entries.length === 0) {
       container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent tasks</div>';
@@ -1954,11 +2025,22 @@ function renderTabContent() {
         var timeStr = ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago';
         var hasResult = t.result && t.status === 'done';
         var isExpanded = expandedTasks.has(id);
-        var resultHtml = hasResult ? '<div style="display:' + (isExpanded ? 'block' : 'none') + ';padding:6px 12px;color:#8ab4c8;font-size:11px;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word;background:#0d1520;border-radius:6px;margin:4px 0;max-width:100%;box-sizing:border-box">' + esc(t.result) + '</div>' : '';
-        return '<div style="padding:4px 0;border-bottom:1px solid #1a2a3a;cursor:' + (hasResult ? 'pointer' : 'default') + '" onclick="if(this.nextElementSibling)this.nextElementSibling.style.display=this.nextElementSibling.style.display===&quot;none&quot;?&quot;block&quot;:&quot;none&quot;">' +
-          '<span style="color:' + (t.status==='done' ? '#4ecca3' : t.status==='working' ? '#f0ad4e' : '#666') + ';font-size:12px">' + (icons[t.status] || '?') + '</span> ' +
-          '<span style="font-size:12px;color:#ccc">' + esc(t.text || id) + '</span>' +
-          '<span style="float:right;font-size:10px;color:#555">' + timeStr + '</span>' +
+        var clickAttr = hasResult ? ' data-taskid="' + id + '" style="cursor:pointer"' : '';
+        var resultDisplay = isExpanded ? 'block' : 'none';
+        var resultHtml = hasResult ? '<div id="result-' + id + '" style="display:' + resultDisplay + ';padding:8px 12px;color:#b8c8d8;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#0d1520;border-radius:8px;margin:4px 0 6px 30px">' + esc(t.result) + '</div>' : '';
+        var rawText = t.text || id;
+        // Default-tag bare tasks (no [Channel] prefix) as [Sutando-core]
+        // so every row in the list shows a channel badge per Susan's
+        // 2026-04-19 17:04 ask.
+        var taggedRaw = /^\\[/.test(rawText) ? rawText : '[Sutando-core] ' + rawText;
+        var displayText = isExpanded ? taggedRaw : summarizeTaskText(taggedRaw);
+        var textClass = isExpanded ? 'task-text expanded' : 'task-text';
+        var expandChip = hasResult ? '<span class="task-expand">' + (isExpanded ? 'Hide &#9662;' : 'Show details &#9656;') + '</span>' : '';
+        return '<div class="task-item"' + clickAttr + '>' +
+          '<div class="task-status ' + t.status + '">' + (icons[t.status] || '?') + '</div>' +
+          '<span class="' + textClass + '">' + displayText + '</span>' +
+          '<span class="task-time">' + timeStr + '</span>' +
+          expandChip +
           '</div>' + resultHtml;
       }).join('');
     }
@@ -1971,10 +2053,11 @@ function renderTabContent() {
       var html = '';
       window._allNotes = notes;
       notes.forEach(function(n) {
-        html += '<div class="note-item" data-title="' + esc(n.title).toLowerCase() + '" data-slug="' + n.slug + '" style="padding:6px 0;border-bottom:1px solid #2a2a3e;display:flex;align-items:center">' +
+        html += '<div class="note-item" data-title="' + esc(n.title).toLowerCase() + '" data-slug="' + n.slug + '" style="padding:12px 10px;margin:0 -10px;border-bottom:1px solid #2a2a3e;display:flex;align-items:center;font-size:16px;line-height:1.6;border-radius:6px">' +
+          '<span style="margin-right:10px;flex-shrink:0">&#128221;</span>' +
           '<span style="color:#7c83ff;cursor:pointer;flex:1" onclick="showNoteContent(&quot;' + n.slug + '&quot;)">' + n.title + '</span>' +
-          '<span style="color:#666;font-size:11px;margin-right:8px">' + new Date(n.modified*1000).toLocaleDateString() + '</span>' +
-          '<span style="color:#e94560;font-size:11px;cursor:pointer;opacity:0.5" onclick="event.stopPropagation();deleteNoteFromUI(&quot;' + n.slug + '&quot;)">x</span></div>';
+          '<span style="color:#666;font-size:13px;margin-right:8px">' + new Date(n.modified*1000).toLocaleDateString() + '</span>' +
+          '<span style="color:#e94560;font-size:13px;cursor:pointer;opacity:0.5" onclick="event.stopPropagation();deleteNoteFromUI(&quot;' + n.slug + '&quot;)">x</span></div>';
       });
       if (!html) html = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No notes</div>';
       container.innerHTML = searchHtml + html;
@@ -2005,15 +2088,15 @@ function renderTabContent() {
     fetch(API_BASE + '/activity').then(function(r){return r.json()}).then(function(data) {
       var items = data.activity || [];
       if (items.length === 0) {
-        container.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px">No recent activity</div>';
+        container.innerHTML = '<div style="color:#666;font-size:16px;text-align:center;padding:12px">No recent activity</div>';
         return;
       }
       var html = '';
       items.forEach(function(item) {
         if (item.type === 'commit') {
-          html += '<div style="padding:3px 0;font-size:12px"><span style="color:#555;font-family:monospace">' + item.hash + '</span> <span style="color:#7c83ff">' + esc(item.message) + '</span></div>';
+          html += '<div style="padding:6px 0;font-size:16px;line-height:1.5"><span style="color:#888;font-family:monospace;font-size:14px">' + item.hash + '</span> <span style="color:#7c83ff">' + esc(item.message) + '</span></div>';
         } else if (item.type === 'task') {
-          html += '<div style="padding:3px 0;font-size:12px;color:#4ecca3">' + esc(item.preview) + '</div>';
+          html += '<div style="padding:6px 0;font-size:16px;line-height:1.5;color:#4ecca3">' + esc(item.preview) + '</div>';
         }
       });
       container.innerHTML = html;
@@ -2508,7 +2591,12 @@ const server = createServer((req, res) => {
 		return;
 	}
 
-	res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+	res.writeHead(200, {
+		'Content-Type': 'text/html; charset=utf-8',
+		'Cache-Control': 'no-cache, no-store, must-revalidate',
+		'Pragma': 'no-cache',
+		'Expires': '0',
+	});
 	res.end(HTML);
 });
 
