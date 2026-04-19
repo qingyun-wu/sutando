@@ -56,21 +56,36 @@ We're looking for contributors to help test and harden these capabilities. If yo
 ## How it works
 
 ```
-    You ──voice──► Voice agent ──────────┐
-     │                                   │ file bridge
-     ├──telegram──► Telegram bridge ─────┤ tasks/ ──► Core agent
-     │                                   │ ◄── results/     │
-     ├──discord───► Discord bridge  ─────┤       │    uses anything:
-     │                                   │       ▼    email, calendar, browser,
-     └──browser───► Web client ──────────┘  speaks /  files, phone, reminders...
-                                            replies
+    You ──voice (browser)──► Voice agent ─────────┐
+     │                       (serves web client,  │
+     │                        WS on :9900)        ├──► inline tools (instant,
+     │                                            │    in-process: describe_screen,
+     ├──phone (Twilio)─────► Conversation server ─┤    get_current_time, hang_up,
+     │                       (Gemini Live,        │    dtmf, ...)
+     │                        WS on :3100)        │
+     │                                            └──┐
+     │                                               │   file bridge
+     ├──telegram──────────► Telegram bridge ─────────┼── tasks/ ──► Core agent ↻
+     │                                               │                  │
+     └──discord───────────► Discord bridge ──────────┘                  ▼
+                                                              uses anything:
+                                                              email, calendar,
+                                                              browser, files,
+                                                              phone, reminders...
+                                    ◄── results/ ◄──
+                                (spoken via voice/phone,
+                                 text via Telegram/Discord)
+
+    ↻ = cron job — fires the core agent every 5 min to process pending tasks,
+        run health checks, and pick the next build-log item autonomously.
 ```
 
-Two processes work together:
-- **Voice agent** (Gemini Live) — listens and talks in real time, runs as a background daemon
+Three processes work together:
+- **Voice agent** (Gemini Live, WebSocket on :9900) — listens and talks in real time for browser voice; also serves the web client at :8080.
+- **Conversation server** (Gemini Live, Twilio WebSocket on :3100) — same role for inbound and outbound phone calls.
 - **Core agent** (Claude Code CLI) — executes tasks with full system access. We use the CLI because it provides cron scheduling, plugins, and an interactive terminal that the SDK doesn't offer out of the box.
 
-They communicate through files: voice agent writes tasks, the core agent executes them, writes results back, voice agent speaks the answer.
+Voice agent and conversation server handle conversation-scope actions with **inline tools** — in-process calls that round-trip instantly (describe the screen, hang up, send DTMF, read the clipboard/current time, capture a screenshot). For anything outside that scope they write to `tasks/`; core reads them, executes, and writes to `results/`, which each channel speaks or messages back. Telegram and Discord bridges only use the `tasks/` path.
 
 ---
 
@@ -81,7 +96,9 @@ They communicate through files: voice agent writes tasks, the core agent execute
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started) (run `claude` once to complete login)
 - Node.js 22+ (`brew install node`)
 - fswatch (`brew install fswatch`)
-- [Google AI Studio API key](https://ai.google.dev) (free — click "Get API key")
+- [Gemini API key](https://ai.google.dev) (click "Get API key")
+- *(optional, for phone calls)* [Twilio account](https://www.twilio.com/) + [ngrok](https://ngrok.com/) — Sutando can answer inbound calls and make outbound calls; you can run the browser + Telegram + Discord paths without them.
+- *(optional, for video/audio)* ffmpeg (`brew install ffmpeg`) — used by subtitle-burn, video-concat, and recording handoff.
 
 ```bash
 # Clone
@@ -96,20 +113,24 @@ cp .env.example .env
 bash src/startup.sh
 ```
 
-This starts all services (voice agent, web client, dashboard, API, Sutando menu bar app) and opens http://localhost:8080 in your browser. The autonomous loop starts automatically — click **Connect** and start talking. Look for **S** in your menu bar — it provides shortcuts (⌃C context drop, ⌃V voice toggle, ⌃M mute) plus **Open Core** (Claude Code terminal) and **Open Dashboard** (status page).
+This starts all services (voice agent, phone conversation server, web client, dashboard, API, Sutando menu bar app) and opens http://localhost:8080 in your browser. The autonomous loop starts automatically — click **Connect** and start talking. Look for **S** in your menu bar — it provides shortcuts (⌃C context drop, ⌃V voice toggle, ⌃M mute) plus **Open Core** (Claude Code terminal) and **Open Dashboard** (status page).
 
-> **Note:** `startup.sh` runs Claude Code with `--dangerously-skip-permissions`, giving Sutando full system access (file operations, terminal commands, browser control). This is required for autonomous operation but means you should review what it does. All actions are logged. Keep the terminal window accessible — you may need to respond there when Claude Code runs out of quota or prompts for input (e.g., CLI commands, permission confirmations).
+> **Why Sutando runs with elevated permissions.** Autonomous voice-driven work means `startup.sh` launches Claude Code with `--dangerously-skip-permissions` — the prompts that would otherwise fire on every tool call would break the voice-in / answer-out flow. In exchange:
+>
+> - **It's local.** Sutando runs entirely on your Mac. No remote control plane, no third party with write access.
+> - **You control the audience.** 3-tier access gating means owner / verified / unverified callers get different capability bands on phone, Discord, and Telegram. Set `VERIFIED_CALLERS` in `.env` before going live.
+> - **Actions are auditable.** Every Claude Code invocation lands in `build_log.md`, every task in `tasks/` + `results/`, every shell call in the service logs (`logs/*.log`). Use `tail -f build_log.md` while it works to watch in real time.
+> - **Hooks are your brake pedal.** `git-rules-guard.sh` (see `~/.claude/hooks`) pops a Discord approval DM for any public write (push / PR / issue comment) regardless of transport. Reject with 👎 to block.
+>
+> Keep the Claude Code terminal window reachable — quota-exhaustion or an unrecognized CLI prompt can leave the core agent waiting for you to respond.
 
 **Why macOS 15+?** The setup scripts assume the Sequoia System Settings layout for granting TCC permissions (Screen Recording, Accessibility, Input Monitoring). Earlier macOS versions may work for the headless parts (proactive loop, Discord/Telegram bridges) but aren't tested.
 
-**macOS permissions** — grant these on first run (System Settings → Privacy & Security):
-- **Screen Recording** → add `claude` and `node`
-- **Accessibility** → add Sutando app (for context drop + voice toggle)
-- **Microphone** → Chrome will ask on first voice connect
+**macOS permissions** — on first run, macOS will ask you to grant Screen Recording, Accessibility, and Microphone access. See [Security](#security) for what each permission is used for.
 
 **Try saying:**
 - "What's on my screen?" — takes a screenshot and describes it
-- "Summon" — opens Zoom with screen sharing, join from your phone
+- "Summon my computer to zoom" — opens Zoom with screen sharing, join from your phone
 - "Join my next meeting" — checks your calendar and joins
 - "Take a note: my first idea" — saves a searchable note
 - "Tutorial" — walks you through all capabilities step by step
@@ -129,20 +150,22 @@ bash src/verify-setup.sh
 - Gemini 429 errors? Your shell may have a stale `GEMINI_API_KEY` overriding `.env` — run `unset GEMINI_API_KEY` then restart
 - Screen recording produces 0-second files? `screencapture -v` needs a TTY. Sutando uses `ffmpeg` instead — make sure it's installed: `brew install ffmpeg`
 - Something broke? Run `bash src/restart.sh` — this kills all services and restarts fresh
+- Sutando acting confused, contradicting itself, or giving stale answers after a long session? Claude hallucinates more as the context window fills up — restart the Claude Code session every now and then to reset.
+- Phone call answers with "We are sorry, an error has occurred"? The conversation server (`skills/phone-conversation/scripts/conversation-server.ts`, port 3100) isn't running. Run `bash src/startup.sh` or `bash src/restart.sh` to relaunch all services.
 
 **Shutting down:**
 ```bash
 bash src/restart.sh    # stops all services (voice agent, web client, API, bridges, etc.)
-pkill -f "src/Sutando" # stop the menu bar app
+pkill -x Sutando # stop the menu bar app
 ```
 Exiting `startup.sh` alone does NOT stop background services. Always use `restart.sh` (or `kill-all.sh` if available) to cleanly shut everything down.
 
 **Uninstalling:**
-1. Stop all services: `bash src/restart.sh && pkill -f "src/Sutando"`
+1. Stop all services: `bash src/restart.sh && pkill -x Sutando`
 2. Remove the repo: `rm -rf ~/Desktop/sutando` (or wherever you cloned it)
 3. Remove config: `rm -rf ~/.claude/projects/*sutando*`
 4. Remove npm packages (optional): the repo uses local `node_modules/` — deleted with the repo
-5. Uninstall brew dependencies (optional): `brew uninstall imsg wacli` if installed
+5. Remove any tools you installed during setup (e.g. `imsg`, `wacli`) via the package manager you used to install them.
 
 ---
 
@@ -166,9 +189,9 @@ These unlock more capabilities. Add to `.env` when ready:
 | Capability | Script | Status |
 |-----------|--------|--------|
 | Voice conversation | `voice-agent.ts` | Verified |
-| Task delegation (voice → Claude) | `task-bridge.ts` | Verified |
+| Task delegation (voice → Claude) | `task-bridge.ts` + `watch-tasks.sh` + `tasks/` dir | Verified |
 | Screen capture + analysis | `macos-tools` skill | Verified |
-| Notes / second brain | via CLAUDE.md | Verified |
+| Notes / second brain | `notes/` directory (YAML-frontmatter markdown) | Verified |
 | Context drop + shortcuts | `src/Sutando/` menu bar app | Verified |
 | Gmail read/send/search | `gws-gmail` skill | Verified |
 | Calendar reading | `google-calendar` skill | Verified |
@@ -188,6 +211,9 @@ These unlock more capabilities. Add to `.env` when ready:
 | Health monitoring | `health-check.py` | Verified |
 | Pattern detection + user modeling | Built into Claude Code memory system | Verified |
 | System dashboard | `dashboard.py` | Verified |
+| Cross-node sync (memory + notes between Macs) | `cross-node-sync` skill | Verified |
+| Info-radar (arXiv / GitHub / HN / news monitoring) | `info-radar` skill + daily digest | Verified |
+| Menu-bar avatar states (idle/listening/speaking/working) | `src/Sutando/main.swift` + `/sse-status` | Verified |
 
 ---
 
@@ -201,8 +227,9 @@ When running, Sutando exposes these local ports:
 | 7844 | Dashboard — status, activity, and capability matrix |
 | 7843 | Agent API — submit tasks from any device |
 | 9900 | Voice agent WebSocket |
-
----
+| 7845 | Screen capture server |
+| 3100 | Phone conversation server (Twilio webhook target) |
+| 4040 | ngrok admin UI (when ngrok is running) |
 
 ---
 
@@ -251,6 +278,12 @@ It consumes API quota proportional to how much work it finds to do.
 **Recommended setup:**
 - Keep your Twilio phone number private
 - Set `VERIFIED_CALLERS` explicitly in `.env` (don't leave it empty)
+
+**macOS permissions Sutando needs** (System Settings → Privacy & Security):
+- **Screen Recording** → add `claude` and `node`. Required for `describe_screen`, `capture_screen`, and the screen-capture server (port 7845) — lets Sutando see what you're looking at when you ask "what's on my screen?". Also used by the screen-record skill for subtitled recordings.
+- **Accessibility** → add the Sutando menu-bar app. Required for the global hotkeys (⌃C context drop, ⌃V voice toggle, ⌃M mute) and for the `macos-use` skill to click/type into native apps on your behalf.
+- **Microphone** → Chrome (and Terminal, for the screen-record skill). Chrome asks on first voice connect — click Allow.
+- **Contacts / Calendar / Reminders** → asked on demand by the features that use them (contact lookup before a call, `gws calendar +agenda`, `reminders.py add/list/complete`). You can grant these when first prompted rather than up front.
 
 See **[SECURITY.md](SECURITY.md)** for full details, best practices, and how to test your setup.
 
