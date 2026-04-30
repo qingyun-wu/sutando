@@ -14,8 +14,67 @@ import type { ToolDefinition } from 'bodhi-realtime-agent';
 const ts = () => new Date().toLocaleTimeString('en-US', { hour12: false });
 
 // Re-export recording/screen/browser tools from browser-tools
-export { describeScreenTool, clickTool, scrollAndDescribeTool, openFileTool, playVideoTool, pauseVideoTool, resumeVideoTool, replayVideoTool, closeVideoTool, switchTabTool, closeTabTool, scrollTool } from './browser-tools.js';
-import { describeScreenTool, clickTool, scrollAndDescribeTool, screenRecordTool, openFileTool, playVideoTool, pauseVideoTool, resumeVideoTool, replayVideoTool, closeVideoTool, switchTabTool, closeTabTool, scrollTool } from './browser-tools.js';
+export { describeScreenTool, clickTool, scrollAndDescribeTool, playVideoTool, pauseVideoTool, resumeVideoTool, replayVideoTool, closeVideoTool, switchTabTool, closeTabTool, scrollTool, openUrlTool } from './browser-tools.js';
+import { describeScreenTool, clickTool, scrollAndDescribeTool, screenRecordTool, playVideoTool, pauseVideoTool, resumeVideoTool, replayVideoTool, closeVideoTool, switchTabTool, closeTabTool, scrollTool, openUrlTool } from './browser-tools.js';
+
+// --- File-open tool (moved out of recording-tools — generic file open, optionally fullscreen) ---
+
+export const openFileTool: ToolDefinition = {
+	name: 'open_file',
+	description:
+		'Open a file with the default macOS app. ALWAYS pass an absolute `path`. ' +
+		'Use for: "open the file", "open that", "can you open it". ' +
+		'If the user says "open the log" or similar, ASK which log they mean (voice-agent, discord-bridge, etc.) — do NOT guess. ' +
+		'Known files: "diagnostic tracker" or "diagnostics" = /tmp/phone-diagnostics-tracker.html, ' +
+		'"voice diagnostics" = /tmp/voice-diagnostics-tracker.html. ' +
+		'Pass `fullscreen=true` if the user wants the file opened in fullscreen — works generically for any file type via Cmd+Ctrl+F to whichever app the OS routed the file to (QuickTime → Present mode, Preview → fullscreen PDF, Chrome → fullscreen page, etc.).',
+	parameters: z.object({
+		path: z.string().describe('Absolute file path to open.'),
+		fullscreen: z.boolean().optional().describe('If true, send Cmd+Ctrl+F to the default app right after opening — generic native-fullscreen toggle, works for any file type (video, PDF, image, web page).'),
+	}),
+	execution: 'inline',
+	async execute(args) {
+		const { path, fullscreen } = args as { path: string; fullscreen?: boolean };
+		console.log(`${ts()} [OpenFile] called (path=${path || 'none'}, fullscreen=${fullscreen || false})`);
+		try {
+			if (!path) return { error: 'No path provided. Pass an absolute file path. (For the most recent recording, call play_video — it auto-finds the file.)' };
+			const filePath = path.replace(/^~/, process.env.HOME || '');
+			if (!existsSync(filePath)) {
+				console.log(`${ts()} [OpenFile] path "${filePath}" does not exist`);
+				return { error: `File not found: ${filePath}. Do not invent paths — use the exact path returned by the tool that produced the file (e.g. record_screen_with_narration returns subtitled_path/narrated_path/recording_path). For the most recent recording without a known path, call play_video instead.` };
+			}
+			// execFileSync — no shell interpolation of caller-controlled filePath
+			// (same CodeQL js/command-line-injection class as #27).
+			// `open <path>` lets macOS's LaunchServices route to the user's default
+			// app for that file type. open_file stays generic — no app forcing.
+			execFileSync('open', [filePath], { timeout: 5_000 });
+			if (fullscreen) {
+				// Brief delay so the just-opened app becomes frontmost before
+				// the keystroke lands. Cmd+Ctrl+F is the macOS native-fullscreen
+				// toggle — every app that supports fullscreen handles it (QT
+				// enters Present mode, Preview/Chrome/Pages all enter fullscreen).
+				// No app-specific logic — open_file is generic.
+				await new Promise(r => setTimeout(r, 1500));
+				try {
+					execFileSync('/usr/bin/osascript', ['-e', 'tell application "System Events" to keystroke "f" using {command down, control down}'], { timeout: 3_000 });
+					console.log(`${ts()} [OpenFile] fullscreen keystroke sent (Cmd+Ctrl+F)`);
+				} catch (err) {
+					console.log(`${ts()} [OpenFile] fullscreen keystroke failed (non-fatal): ${err}`);
+				}
+			}
+			const size = statSync(filePath).size;
+			console.log(`${ts()} [OpenFile] opened ${filePath} (${(size / 1024 / 1024).toFixed(1)}MB)`);
+			return {
+				status: 'opened',
+				path: filePath,
+				size_mb: +(size / 1024 / 1024).toFixed(1),
+				fullscreen: !!fullscreen,
+			};
+		} catch (err) {
+			return { error: `open_file failed: ${err instanceof Error ? err.message : err}` };
+		}
+	},
+};
 
 // Re-export meeting tools from meeting-tools
 export { summonTool, dismissTool, joinZoomTool, joinGmeetTool, lookupMeetingIdTool, callContactTool } from './meeting-tools.js';
@@ -75,27 +134,7 @@ export const pressKeyTool: ToolDefinition = {
 // Placeholder to maintain the export shape — the real tools are imported at the top
 const _browserToolsImported = { switchTabTool, scrollTool }; // eslint-disable-line @typescript-eslint/no-unused-vars
 
-export const openUrlTool: ToolDefinition = {
-	name: 'open_url',
-	description:
-		'Open a URL in a new Chrome tab. Use for: "open github.com", "go to that link".',
-	parameters: z.object({
-		url: z.string().describe('The URL to open'),
-	}),
-	execution: 'inline',
-	async execute(args) {
-		const { url } = args as { url: string };
-		// Escape backslashes first, then quotes — prevents shell injection via osascript
-		const safeUrl = url.replace(/\\/g, '\\\\').replace(/'/g, "'\\''").replace(/"/g, '\\"');
-		try {
-			execSync(`osascript -e 'tell application "Google Chrome" to tell front window to make new tab with properties {URL:"${safeUrl}"}'`, { timeout: 5_000 });
-			console.log(`${ts()} [OpenURL] opened: ${url}`);
-			return { status: 'opened', url };
-		} catch (err) {
-			return { error: `Failed to open ${url}: ${err instanceof Error ? err.message : err}` };
-		}
-	},
-};
+// openUrlTool moved to browser-tools.ts — imported via the re-export at top.
 
 // --- macOS system tools ---
 
