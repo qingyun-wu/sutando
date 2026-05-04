@@ -945,8 +945,11 @@ new MutationObserver(() => {
 }).observe(document.body, { attributes: true, attributeFilter: ['data-task-action'] });
 function toggleResult(taskId) {
   if (expandedTasks.has(taskId)) { expandedTasks.delete(taskId); userExpanded.delete(taskId); } else { expandedTasks.add(taskId); userExpanded.add(taskId); userCollapsed = false; }
-  const el = document.getElementById('result-' + taskId);
-  if (el) el.style.display = expandedTasks.has(taskId) ? 'block' : 'none';
+  // Re-render the whole task list so the .task-text gets the expanded class,
+  // the "Show details" chip flips to "Hide", the displayText switches from
+  // summary to full, and the reply/action buttons appear. Just toggling the
+  // result block's display left the task header in a half-expanded state.
+  renderTasks();
 }
 window.toggleAllTasks = toggleAllTasks;
 function toggleAllTasks() {
