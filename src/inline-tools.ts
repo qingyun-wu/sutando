@@ -816,6 +816,58 @@ async function loadSkillManifestTools(): Promise<ToolDefinition[]> {
 }
 const personalTools = await loadSkillManifestTools();
 
+// Manifest-driven discovery of skills that core (not voice-inline) runs.
+// When a manifest has `documented_for_core: true` and a `core_description`,
+// the description is exposed to voice-agent's system-prompt assembly so
+// Gemini knows the capability exists and to delegate via `work` instead
+// of saying "I can't do that". The skill itself is NOT loaded inline — it
+// stays as docs+scripts and the core agent runs it when the work-task
+// arrives. Same scan-paths as loadSkillManifestTools.
+//
+// SYNC vs ASYNC NOTE (Mini's #592 review): this helper is sync because
+// we never need to import any module — we just read manifest.json files.
+// loadSkillManifestTools is async because it dynamically `await import()`s
+// a tools.ts. Don't try to align them — they're correctly sync/async for
+// what each one does.
+function loadCoreDocumentedSkills(): { name: string; description: string }[] {
+	const dirsToScan: string[] = [join(process.cwd(), 'skills')];
+	const privateRoot = process.env.SUTANDO_PRIVATE_DIR;
+	if (privateRoot) {
+		const expanded = privateRoot.replace(/^~/, process.env.HOME || '');
+		dirsToScan.push(join(expanded, 'skills'));
+	}
+	// Last-write-wins map so private (later in dirsToScan) overrides public —
+	// same precedence convention as loadSkillManifestTools above.
+	const byName = new Map<string, { name: string; description: string }>();
+	for (const skillsDir of dirsToScan) {
+		if (!existsSync(skillsDir)) continue;
+		let dirs: string[];
+		try {
+			dirs = readdirSync(skillsDir).filter(n => {
+				try { return statSync(join(skillsDir, n)).isDirectory(); } catch { return false; }
+			});
+		} catch { continue; }
+		for (const dirName of dirs) {
+			const manifestPath = join(skillsDir, dirName, 'manifest.json');
+			if (!existsSync(manifestPath)) continue;
+			let manifest: { documented_for_core?: boolean; core_description?: string; name?: string; tools?: string };
+			try {
+				manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+			} catch { continue; }
+			if (!manifest.documented_for_core || !manifest.core_description) continue;
+			// Dedup against inline-loaded skills: if the manifest also exposes
+			// a `tools:` entry, the skill is already inline-listed and
+			// double-listing here would teach Gemini both "call this inline"
+			// AND "delegate via work" simultaneously. Pick the inline path.
+			if (manifest.tools) continue;
+			const name = manifest.name || dirName;
+			byName.set(name, { name, description: manifest.core_description });
+		}
+	}
+	return Array.from(byName.values());
+}
+export const coreDocumentedSkills = loadCoreDocumentedSkills();
+
 export const inlineTools = assertUniqueToolNames([
 	pressKeyTool, scrollTool, switchTabTool, closeTabTool, openUrlTool,
 	switchAppTool, captureScreenTool, typeTextTool,
