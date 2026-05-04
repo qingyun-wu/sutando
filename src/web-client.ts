@@ -920,7 +920,37 @@ function setStatus(text, state) {
 
 // ─── Task list ────────────────────────────────────────────
 // Expose on window so inline tools can access via Chrome AppleScript JS injection
-const taskMap = window.taskMap = {};
+// Restore taskMap + expandedTasks from localStorage so results don't disappear
+// across page refreshes. The /tasks/active API only returns the result text on
+// the first poll after the bridge writes it; once the result file is moved to
+// archive, the API returns the task with an empty result. Without persistence
+// here, refreshing the page wipes the results from the UI.
+const PERSIST_KEY_TASKS = 'sutando-taskmap-v1';
+const PERSIST_KEY_EXPAND = 'sutando-expanded-v1';
+function loadPersistedTaskMap() {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY_TASKS);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    // Reconstruct Date objects on time fields
+    Object.values(parsed).forEach(t => { if (t && t.time) t.time = new Date(t.time); });
+    return parsed;
+  } catch { return {}; }
+}
+function loadPersistedExpanded() {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY_EXPAND);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch { return new Set(); }
+}
+function persistTaskMap() {
+  try { localStorage.setItem(PERSIST_KEY_TASKS, JSON.stringify(taskMap)); } catch {}
+}
+function persistExpanded() {
+  try { localStorage.setItem(PERSIST_KEY_EXPAND, JSON.stringify(Array.from(expandedTasks))); } catch {}
+}
+const taskMap = window.taskMap = loadPersistedTaskMap();
 function updateTask(taskId, status, text, result) {
   const existing = taskMap[taskId] || {};
   const isNew = !existing.status;
@@ -933,9 +963,11 @@ function updateTask(taskId, status, text, result) {
   if ((status === 'working' || status === 'done') && !expandedTasks.has(taskId) && !userCollapsed) {
     expandedTasks.add(taskId);
   }
+  persistTaskMap();
+  persistExpanded();
   renderTasks();
 }
-const expandedTasks = window.expandedTasks = new Set();
+const expandedTasks = window.expandedTasks = loadPersistedExpanded();
 const userExpanded = window.userExpanded = new Set(); // user-initiated expands — never auto-collapse these
 let userCollapsed = false; // user manually collapsed — suppress auto-expand
 // Listen for external collapse/expand commands (from inline tools via AppleScript)
@@ -949,6 +981,7 @@ function toggleResult(taskId) {
   // the "Show details" chip flips to "Hide", the displayText switches from
   // summary to full, and the reply/action buttons appear. Just toggling the
   // result block's display left the task header in a half-expanded state.
+  persistExpanded();
   renderTasks();
 }
 window.toggleAllTasks = toggleAllTasks;
@@ -956,6 +989,7 @@ function toggleAllTasks() {
   const hasExpanded = expandedTasks.size > 0;
   if (hasExpanded) { expandedTasks.clear(); userCollapsed = true; }
   else { Object.entries(taskMap).forEach(([id, t]) => { if (t.result) expandedTasks.add(id); }); userCollapsed = false; }
+  persistExpanded();
   renderTasks();
 }
 document.addEventListener('click', function(e) {
@@ -1022,12 +1056,20 @@ function renderTasks() {
       (hasExpanded ? 'collapse all' : 'expand all') +
       '</span>';
   }
-  const sorted = entries.sort((a, b) => b[1].time - a[1].time).slice(0, 8);
+  // Render top-30 most recent. Was 8, but in active sessions (e.g. a kid
+  // iterating on a party plan) new tasks pushed earlier valuable results out
+  // of view within seconds. 30 keeps a longer history visible; localStorage
+  // persistence above keeps results from being lost across refreshes.
+  const sorted = entries.sort((a, b) => b[1].time - a[1].time).slice(0, 30);
   container.innerHTML = sorted.map(([id, t]) => {
     const icons = { pending: '&#8987;', working: '&#9881;', done: '&#10003;', error: '&#10007;' };
     const ago = Math.round((Date.now() - t.time) / 1000);
     const timeStr = ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago';
-    const hasResult = t.result && t.status === 'done';
+    // Show the result if it exists, regardless of status. The agent's task
+    // bookkeeping sometimes leaves tasks in 'working' even after the result
+    // file is written — gating render on status === 'done' meant those
+    // results never showed up in the UI even though they were in taskMap.
+    const hasResult = !!t.result;
     const clickAttr = hasResult ? ' data-taskid="' + id + '" style="cursor:pointer"' : '';
     const isExpanded = expandedTasks.has(id);
     const resultDisplay = isExpanded ? 'block' : 'none';
@@ -1048,8 +1090,9 @@ function renderTasks() {
       actionsHtml = '<div class="task-actions" data-replyfor="' + id + '">' + inner + '</div>';
     }
     const rawText = t.text || id;
-    // Default-tag bare tasks (no [Channel] prefix) as [Sutando-core].
-    const taggedRaw = /^\\[/.test(rawText) ? rawText : '[Sutando-core] ' + rawText;
+    // Default-tag bare tasks (no [Channel] prefix) as [Voice] — the
+    // overwhelming majority of un-prefixed tasks come from the voice agent.
+    const taggedRaw = /^\\[/.test(rawText) ? rawText : '[Voice] ' + rawText;
     const displayText = isExpanded ? taggedRaw : summarizeTaskText(taggedRaw);
     const textClass = isExpanded ? 'task-text expanded' : 'task-text';
     const expandChip = hasResult ? '<span class="task-expand">' + (isExpanded ? 'Hide ▾' : 'Show details ▸') + '</span>' : '';
@@ -1119,6 +1162,7 @@ function startTaskPolling() {
           delete taskMap[id];
         }
       }
+      persistTaskMap();
       renderTasks();
       // Update system status indicators
       const statusParts = [];
@@ -2185,16 +2229,19 @@ function renderTabContent() {
         var id = entry[0], t = entry[1];
         var ago = Math.round((Date.now() - t.time) / 1000);
         var timeStr = ago < 60 ? ago + 's ago' : Math.round(ago / 60) + 'm ago';
-        var hasResult = t.result && t.status === 'done';
+        // Render results whenever they exist — agent's task bookkeeping
+        // sometimes leaves tasks in 'working' state even after the result
+        // file is written. Same fix as the main renderTasks path above.
+        var hasResult = !!t.result;
         var isExpanded = expandedTasks.has(id);
         var clickAttr = hasResult ? ' data-taskid="' + id + '" style="cursor:pointer"' : '';
         var resultDisplay = isExpanded ? 'block' : 'none';
         var resultHtml = hasResult ? '<div id="result-' + id + '" style="display:' + resultDisplay + ';padding:8px 12px;color:#b8c8d8;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#0d1520;border-radius:8px;margin:4px 0 6px 30px">' + esc(t.result) + '</div>' : '';
         var rawText = t.text || id;
-        // Default-tag bare tasks (no [Channel] prefix) as [Sutando-core]
-        // so every row in the list shows a channel badge per Susan's
-        // 2026-04-19 17:04 ask.
-        var taggedRaw = /^\\[/.test(rawText) ? rawText : '[Sutando-core] ' + rawText;
+        // Default-tag bare tasks (no [Channel] prefix) as [Voice] — the
+        // overwhelming majority of un-prefixed tasks come from the voice agent.
+        // (Was [Sutando-core]; renamed 2026-05-03 per Chi's "rename to Voice".)
+        var taggedRaw = /^\\[/.test(rawText) ? rawText : '[Voice] ' + rawText;
         var displayText = isExpanded ? taggedRaw : summarizeTaskText(taggedRaw);
         var textClass = isExpanded ? 'task-text expanded' : 'task-text';
         var expandChip = hasResult ? '<span class="task-expand">' + (isExpanded ? 'Hide &#9662;' : 'Show details &#9656;') + '</span>' : '';
