@@ -1,0 +1,3 @@
+[submodule "skills-personal"]
+	path = skills-personal
+	url = https://github.com/qingyun-wu/skills-personal.git
