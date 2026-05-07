@@ -1097,14 +1097,54 @@ async function main() {
 
 	voiceSessionRef = session;
 
+	// Idle teardown — close the upstream Gemini transport when no client has
+	// been connected for IDLE_TEARDOWN_MS. Without this, voice-agent keeps the
+	// Gemini Live session alive 24/7; every ~9-min Gemini reconnect ("GoAway")
+	// produces a phantom assistant turn (sometimes a tool call) with no user
+	// input. Symptoms observed: phantom save_meeting_note polluting markdown
+	// notes, phantom open_url opening browser tabs, phantom work tool calls
+	// writing fake task files. CLOSED state is a fixed point when
+	// clientConnected=false (the existing health monitor only reconnects
+	// CLOSED→CONNECTING when a client is present), so once we transition there
+	// no phantoms can fire until the next legitimate client reconnect.
+	// Tunable via env var per Mini's #602 review note. Defaults to 60s — sane
+	// for the voice / phone reconnect cadence we've observed; raise if a host
+	// has frequent ~70s connect/disconnect churn that re-opens too aggressively.
+	const IDLE_TEARDOWN_MS = Number(process.env.SUTANDO_VOICE_IDLE_TEARDOWN_MS) || 60_000;
+	let idleTeardownTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const cancelIdleTeardown = () => {
+		if (idleTeardownTimer) {
+			clearTimeout(idleTeardownTimer);
+			idleTeardownTimer = null;
+		}
+	};
+	const scheduleIdleTeardown = () => {
+		cancelIdleTeardown();
+		idleTeardownTimer = setTimeout(async () => {
+			idleTeardownTimer = null;
+			if ((session as any).clientConnected) return;
+			const transport = (session as any).transport;
+			if (!transport?.disconnect) return;
+			console.log(`${ts()} [VoiceSession] Idle ${IDLE_TEARDOWN_MS / 1000}s — closing Gemini transport (no phantoms while CLOSED)`);
+			try {
+				await transport.disconnect();
+			} catch (err) {
+				console.error(`${ts()} [VoiceSession] Idle teardown failed: ${(err as Error)?.message ?? err}`);
+			}
+		}, IDLE_TEARDOWN_MS);
+	};
+
 	// Flush metrics on client disconnect — bodhi's handleClientDisconnected()
-	// doesn't trigger onSessionEnd, so metrics would never be written.
+	// doesn't trigger onSessionEnd, so metrics would never be written. Also
+	// arms the idle-teardown timer (see above).
 	const origDisconnect = (session as any).handleClientDisconnected?.bind(session);
 	if (origDisconnect) {
 		(session as any).handleClientDisconnected = () => {
 			origDisconnect();
 			writeVoiceMetrics();
 			writeVoiceState(false);
+			scheduleIdleTeardown();
 		};
 	}
 
@@ -1119,11 +1159,12 @@ async function main() {
 	// jsonl because MBP kept one voice-agent process alive across many
 	// client reconnects. First connect still goes through bodhi's
 	// onSessionStart (our callback resets state there); this wrap only
-	// kicks in on the 2nd+ connect.
+	// kicks in on the 2nd+ connect. Also cancels any pending idle teardown.
 	let clientHasConnectedOnce = false;
 	const origConnect = (session as any).handleClientConnected?.bind(session);
 	if (origConnect) {
 		(session as any).handleClientConnected = () => {
+			cancelIdleTeardown();
 			if (clientHasConnectedOnce) {
 				userTurnCount = 0; userHasInterrupted = false; sessionEnding = false;
 				voiceSessionStart = Date.now(); metricsWritten = false;
@@ -1136,6 +1177,10 @@ async function main() {
 			origConnect();
 		};
 	}
+
+	// Arm the initial teardown — voice-agent boots with no client; if none
+	// connects within IDLE_TEARDOWN_MS, close the upstream transport.
+	scheduleIdleTeardown();
 
 	// Wire task status → web client
 	setTaskStatusCallback((taskId, status, text, result) => {
