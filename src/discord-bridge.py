@@ -1382,6 +1382,136 @@ async def _mod_flush_timer_loop():
         except Exception as e:
             print(f"  [mod-flush-timer] error: {e}", flush=True)
 
+# ---------------------------------------------------------------------------
+# Auto-welcome on first user post in a configured welcome channel.
+# Per msze 2026-05-06: welcome should respond to the user's first hi/intro
+# message in the configured channel, NOT fire on the join event itself. That
+# drops the privileged Server Members Intent requirement entirely — this
+# uses the existing on_message path. Per-guild config in access.json:
+#   {"guilds": {"<guild_id>": {"welcome_channel": "<id>", "welcome_template": "<path>"}}}
+# Both fields required for welcome to fire. Bridge does NOT bake an AG2
+# default — operator picks the template path per-guild. Welcomed-users
+# dedup state at state/discord-welcomed-users.json keeps a user from being welcomed
+# twice in the same guild across bridge restarts.
+
+WELCOMED_USERS_FILE = STATE_DIR / "discord-welcomed-users.json"
+
+
+def _load_welcome_config(guild_id):
+    """Return (welcome_channel_id, welcome_template_path) for `guild_id`
+    from access.json, or (None, None) if not configured. Both fields must
+    be present for welcome to be considered configured. Defensive against
+    missing/malformed JSON."""
+    try:
+        data = json.loads(ACCESS_FILE.read_text())
+    except Exception:
+        return None, None
+    g = data.get("guilds", {}).get(str(guild_id))
+    if not isinstance(g, dict):
+        return None, None
+    ch = g.get("welcome_channel")
+    tpl = g.get("welcome_template")
+    try:
+        ch_int = int(ch) if isinstance(ch, (int, str)) else None
+    except (TypeError, ValueError):
+        ch_int = None
+    tpl_str = tpl if isinstance(tpl, str) and tpl else None
+    return ch_int, tpl_str
+
+
+def _load_welcome_channel(guild_id):
+    """Back-compat shim — return only the channel id."""
+    return _load_welcome_config(guild_id)[0]
+
+
+def _read_welcome_template(template_path=None):
+    """Read the welcome template at `template_path`. Empty string on
+    missing path or read failure (callers treat empty as 'skip the
+    welcome'). No bridge-side default — operator must configure per-guild
+    via access.json `welcome_template`."""
+    if not template_path:
+        return ""
+    p = Path(template_path).expanduser()
+    if not p.is_absolute():
+        p = REPO / p
+    try:
+        return p.read_text()
+    except Exception:
+        return ""
+
+
+def _load_welcomed_users():
+    """Return {guild_id_str: set(user_id_str)} from the persisted dedup file,
+    or empty dict if missing/malformed."""
+    try:
+        raw = json.loads(WELCOMED_USERS_FILE.read_text())
+    except Exception:
+        return {}
+    out = {}
+    for gid, users in (raw or {}).items():
+        if isinstance(users, list):
+            out[str(gid)] = set(str(u) for u in users)
+    return out
+
+
+def _mark_user_welcomed(guild_id, user_id):
+    """Atomically add (guild_id, user_id) to the persisted dedup set.
+    Atomic write via tmp + rename so a crash mid-write doesn't leave a
+    half-written state file."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        current = _load_welcomed_users()
+        guild_set = current.setdefault(str(guild_id), set())
+        guild_set.add(str(user_id))
+        # JSON can't serialize sets — convert to lists at write time.
+        serializable = {gid: sorted(list(uids)) for gid, uids in current.items()}
+        tmp = WELCOMED_USERS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(serializable))
+        os.replace(tmp, WELCOMED_USERS_FILE)
+    except Exception as e:
+        # Non-fatal: dedup may double-fire on next restart, but better than
+        # blocking the welcome itself.
+        print(f"  [welcome] mark-welcomed write failed: {e}", flush=True)
+
+
+def _is_user_welcomed(guild_id, user_id, welcomed_users=None):
+    """Pure check: has this user already been welcomed in this guild?
+    `welcomed_users` is the loaded dict from `_load_welcomed_users()` —
+    pass it in for testability; defaults to a fresh load."""
+    if welcomed_users is None:
+        welcomed_users = _load_welcomed_users()
+    return str(user_id) in welcomed_users.get(str(guild_id), set())
+
+
+def _should_welcome_first_post(message, welcome_channel_id, welcome_template_path, welcomed_users):
+    """Decide whether `message` triggers a welcome. Pure function for
+    testability — caller passes the resolved welcome_channel_id +
+    welcome_template_path (both from access.json) and the pre-loaded
+    welcomed_users dict.
+
+    Returns (do_welcome, reason). do_welcome=True only when ALL of:
+      - message.guild is not None
+      - welcome_channel_id is set
+      - welcome_template_path is set (no bridge-side default)
+      - message.channel.id == welcome_channel_id
+      - message.author is not a bot
+      - message.author has not been welcomed yet in this guild
+    """
+    guild = getattr(message, "guild", None)
+    if guild is None:
+        return False, "no_guild"
+    if welcome_channel_id is None:
+        return False, "no_welcome_channel_configured"
+    if not welcome_template_path:
+        return False, "no_welcome_template_configured"
+    if message.channel.id != welcome_channel_id:
+        return False, "wrong_channel"
+    if getattr(message.author, "bot", False):
+        return False, "bot_account"
+    if _is_user_welcomed(guild.id, message.author.id, welcomed_users):
+        return False, "already_welcomed"
+    return True, "ok"
+
 
 # Track pending replies: task_id -> channel
 pending_replies = {}
@@ -1476,6 +1606,52 @@ async def _handle_discord_message(message, force=False):
 
     # In channels, check if mention is required
     if not is_dm:
+        # First-post welcome: if this message is in the guild's configured
+        # welcome_channel and the author hasn't been welcomed yet, post the
+        # configured welcome template and short-circuit (don't process the
+        # "Hi" as a task). Sits before the requireMention/allowFrom gate
+        # because the welcome trigger is independent of those — anyone
+        # posting for the first time in the configured welcome channel
+        # gets greeted. No bridge-side default template — operator picks
+        # per-guild via access.json `welcome_template`.
+        guild = getattr(message, "guild", None)
+        if guild is not None:
+            welcome_channel_id, welcome_template_path = _load_welcome_config(guild.id)
+            do_welcome, reason = _should_welcome_first_post(
+                message, welcome_channel_id, welcome_template_path, _load_welcomed_users()
+            )
+            if do_welcome:
+                template = _read_welcome_template(welcome_template_path)
+                if template:
+                    # Mark BEFORE sending so two near-simultaneous first posts
+                    # from the same user don't both pass the welcomed-check
+                    # during the await on `channel.send`. Tradeoff: if send
+                    # fails, the user is marked welcomed without seeing the
+                    # message — recoverable manually by editing the state
+                    # file. Better than a double-welcome.
+                    _mark_user_welcomed(guild.id, message.author.id)
+                    body = f"<@{message.author.id}> {template}"
+                    # `allowed_mentions` constrains who can be pinged via the
+                    # welcome body — defense in depth against an operator-
+                    # supplied template containing @everyone / @here / role
+                    # mentions. Only the welcomed user themselves can be
+                    # actually pinged.
+                    am = discord.AllowedMentions(
+                        everyone=False, roles=False, users=[message.author]
+                    )
+                    try:
+                        for chunk in _chunk_for_discord(body):
+                            await message.channel.send(chunk, allowed_mentions=am)
+                        print(f"  [welcome] sent to {message.author} in #{getattr(message.channel,'name','?')}", flush=True)
+                    except Exception as e:
+                        print(f"  [welcome] send failed for {message.author}: {e}", flush=True)
+                else:
+                    print(f"  [welcome] template empty/missing at {welcome_template_path}; skipping {message.author}", flush=True)
+                return
+            elif welcome_channel_id is not None and message.channel.id == welcome_channel_id and reason != "ok":
+                # In welcome channel but skipped for a reason — log only.
+                print(f"  [welcome] skipping {message.author} (reason={reason})", flush=True)
+
         channel_cfg = load_channel_config(str(message.channel.id))
         require_mention = True  # default
         if channel_cfg is not None:
