@@ -1025,16 +1025,24 @@ def main():
     checks = run_all_checks()
     issues = [c for c in checks if c["status"] not in ("ok", "warn")]
 
-    # Optional: emit a task for the CLI to act on. Runs before --json early-
-    # return so cron-driven --json --emit-task callers get both behaviors.
-    if do_emit:
-        emit_task_for_failures(checks)
     # Optional: macOS notification surface for the launchd-supervised path
-    # (com.sutando.health-check-fallback). Independent dedup state from
+    # (com.sutando.health-check-fallback). Notifies on the INITIAL check set
+    # — the launchd fallback wants the user-visible alert immediately, even
+    # if --fix would resolve some issues. Independent dedup state from
     # emit-task — the two surfaces are deliberately decoupled so neither
     # can suppress the other.
     if do_notify:
         notify_for_failures(checks)
+
+    # Emit-task: when NOT running --fix, the initial check IS the residual,
+    # so emit here BEFORE the early-exit paths (--json return, --quiet
+    # sys.exit). Per Mini's PR #640 v2-regression catch: my prior change
+    # moved emit-task to end-of-main, which the launchd fallback's
+    # `--quiet --emit-task --notify-on-fail` invocation bypassed via the
+    # quiet-path sys.exit(1). Splitting the emit logic by --fix state
+    # restores coverage for the no-fix path.
+    if do_emit and not do_fix:
+        emit_task_for_failures(checks)
 
     if as_json:
         print(json.dumps({"checks": checks, "issues": len(issues), "total": len(checks)}, indent=2))
@@ -1166,6 +1174,17 @@ def main():
                                      stdout=open("/tmp/conversation-server.log", "a"),
                                      stderr=subprocess.STDOUT, start_new_session=True)
                     print(f"  {c['name']}: {'restarted (stale code)' if c['status'] == 'stale' else 'restarted'}")
+
+    # Emit task on the RESIDUAL failure set when --fix ran (per PR #640 v2
+    # review). The no-fix path emits earlier, before --quiet / --json early
+    # exits (per #640 v2-regression: launchd's `--quiet --emit-task` was
+    # bypassing the end-of-main emit via sys.exit(1)).
+    if do_emit and do_fix and issues:
+        # Brief delay so restarts have a chance to register before re-check.
+        # 2s matches the fix-loop's per-service `time.sleep(1)` budget.
+        import time as _t; _t.sleep(2)
+        residual_checks = run_all_checks()
+        emit_task_for_failures(residual_checks)
 
     sys.exit(1 if issues else 0)
 
