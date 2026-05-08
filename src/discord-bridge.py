@@ -66,6 +66,37 @@ SEND_ALLOWED_PREFIXES = (
 
 _FENCE_LINE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([^\s`~][^`~]*)?\s*$")
 
+# Discord-state references in task bodies that codex sandbox cannot resolve.
+# When a team/other-tier task asks the agent to look at a specific channel
+# or DM context, the codex sandbox path can't fulfill it (no Discord token,
+# no server access). Detected via channel-mention syntax `<#1234>`. The
+# bridge intercepts these BEFORE writing the task, posts a silent note to
+# the appropriate guild's escalation_channel, and writes a tier instruction
+# that tells the agent to NO-REPLY archive (no public "Sandbox unavailable"
+# string). Per msze_'s 2026-05-07 directive + Chi's "ship 1" call.
+_DISCORD_CHANNEL_REF_RE = re.compile(r"<#(\d+)>")
+
+# User-mention regex used by escalation cc_ids extraction. Critical: this
+# explicitly rejects role mentions `<@&id>` (the leading `&` after `<@`).
+# Earlier code did `s.strip("<@>")` after a startswith("<@") check, which
+# matched both shapes — role mentions then produced `&123` and `int(...)`
+# raised ValueError, killing the escalation post entirely. Per MacBook's
+# #639 v4 line-level review.
+_DISCORD_USER_MENTION_RE = re.compile(r"^<@(\d+)>$")
+
+
+def _extract_user_id_mentions(mention_strs):
+    """Parse `<@user_id>` strings from a sequence into int user_ids. Skips
+    role mentions `<@&role_id>` and any malformed entry. Used by escalation
+    paths that build a Discord `AllowedMentions(users=...)` list from
+    access.json's `escalation_cc_user_ids`."""
+    out = []
+    for s in mention_strs or ():
+        m = _DISCORD_USER_MENTION_RE.match(s)
+        if m:
+            out.append(int(m.group(1)))
+    return out
+
 
 def _is_fence_open_line(line: str):
     """Return the fence opener string if `line` is a real Markdown block-fence line.
@@ -760,6 +791,190 @@ def _sanitize_for_quote(text):
     )
 
 
+def _extract_referenced_channels(text):
+    """Return the list of int channel-ids referenced via `<#1234>` syntax in
+    `text`. Empty list if none. Used by the bridge's task-write path to
+    detect task bodies asking for Discord-state codex sandbox can't resolve."""
+    if not text:
+        return []
+    return [int(m) for m in _DISCORD_CHANNEL_REF_RE.findall(text)]
+
+
+async def _silent_escalate_for_discord_state(message, user_task_text):
+    """Detect tasks that reference Discord-side state (channel mentions like
+    `<#1234>`) and silently escalate to the appropriate guild's
+    `escalation_channel` rather than letting the agent fall into the cold
+    "Sandbox unavailable" fallback when codex sandbox tries to fulfill what
+    it structurally can't (no Discord token, no server access).
+
+    Decision flow:
+      1. If `user_task_text` contains no `<#...>` reference → return False
+         (caller proceeds with normal team/other tier instruction).
+      2. Resolve target guild for escalation:
+         a. If the task originated in a guild channel → use that guild.
+         b. Else (DM origin) → look up the FIRST referenced channel and use
+            that channel's guild.
+      3. Look up `escalation_channel` from access.json's `guilds.<gid>` block.
+      4. POST a silent notification to that channel summarizing sender +
+         original task body. Returns True on attempted post (regardless of
+         success), so the caller writes the "already_escalated" tier
+         instruction and the agent NO-REPLY archives.
+      5. If no escalation channel can be resolved → still return True so
+         the agent stays silent (msze_'s "don't respond publicly" intent).
+
+    Returns True iff the task was identified as Discord-state-reference and
+    the agent should NO-REPLY archive instead of running codex.
+    """
+    refs = _extract_referenced_channels(user_task_text)
+    if not refs:
+        return False
+
+    # Determine target guild for escalation
+    target_guild_id = None
+    msg_guild = getattr(message, "guild", None)
+    if msg_guild is not None:
+        target_guild_id = msg_guild.id
+    else:
+        # DM origin — try resolving the first referenced channel to its guild.
+        # Two extra gates here vs origin-guild path (per MacBook's #639 review):
+        #   (a) reject anything that isn't a guild text/thread channel — a fetch
+        #       success on a category/voice/etc. doesn't mean it's safe to use
+        #       for routing, and we want fail-closed on weird shapes.
+        #   (b) require the target guild to have `mod_active=True` (explicit
+        #       opt-in for moderation flow) — without this, an arbitrary user
+        #       DM'ing a `<#...>` reference for ANY guild the bot is in could
+        #       leak their request into that guild's escalation channel.
+        guild_text_types = {
+            getattr(discord, "ChannelType", None) and discord.ChannelType.text,
+            getattr(discord, "ChannelType", None) and discord.ChannelType.public_thread,
+            getattr(discord, "ChannelType", None) and discord.ChannelType.private_thread,
+            getattr(discord, "ChannelType", None) and discord.ChannelType.news_thread,
+            getattr(discord, "ChannelType", None) and discord.ChannelType.news,
+        }
+        guild_text_types.discard(None)
+        for ref_ch_id in refs:
+            try:
+                ch = client.get_channel(ref_ch_id)
+                if ch is None:
+                    ch = await client.fetch_channel(ref_ch_id)
+            except Exception as e:
+                print(f"  [discord-state-escalate] failed to resolve channel {ref_ch_id}: {e}", flush=True)
+                continue
+            if ch is None:
+                continue
+            ch_type = getattr(ch, "type", None)
+            if guild_text_types and ch_type is not None and ch_type not in guild_text_types:
+                print(f"  [discord-state-escalate] channel {ref_ch_id} type={ch_type} is not a guild text/thread channel; skipping", flush=True)
+                continue
+            ch_guild = getattr(ch, "guild", None)
+            if ch_guild is None:
+                continue
+            # DM-origin gate 1: require explicit mod_active=True for routing
+            # (the same opt-in signal #633's mod-judge uses).
+            try:
+                guild_active, _roles = _load_mod_config(ch_guild.id)
+            except Exception:
+                guild_active = False
+            if not guild_active:
+                print(f"  [discord-state-escalate] guild {ch_guild.id} has mod_active=False; not routing DM-referenced escalation", flush=True)
+                continue
+            # DM-origin gate 2 (per MacBook #639 v2 follow-up review):
+            # `mod_active=True` is an opt-in gate, NOT a sender-auth gate.
+            # A team-tier-trusted DM sender is "trusted by Sutando" but that
+            # doesn't extend to routing escalations to ANOTHER guild they
+            # may not be a member of. Require the sender to be a member of
+            # the target guild before routing.
+            sender_id = getattr(message.author, "id", None) if hasattr(message, "author") else None
+            if sender_id is None:
+                continue
+            sender_member = None
+            try:
+                if hasattr(ch_guild, "get_member"):
+                    sender_member = ch_guild.get_member(sender_id)
+            except Exception as e:
+                print(f"  [discord-state-escalate] get_member raised for sender {sender_id} in guild {ch_guild.id}: {e}", flush=True)
+                sender_member = None
+            # If cache miss, fall back to HTTP. Per discord.py docs:
+            #   `Guild.fetch_member()` raises `discord.NotFound` when the user
+            #   is NOT in the guild (NOT `None`); also `discord.Forbidden` if
+            #   the bot lacks permission, and `discord.HTTPException` for
+            #   transient errors. All three should silently fail-closed (no
+            #   routing). Per MacBook's #639 v3 follow-up review.
+            if sender_member is None and hasattr(ch_guild, "fetch_member"):
+                _NotFound = getattr(discord, "NotFound", None)
+                _Forbidden = getattr(discord, "Forbidden", None)
+                _HTTPException = getattr(discord, "HTTPException", None)
+                try:
+                    sender_member = await ch_guild.fetch_member(sender_id)
+                except Exception as e:
+                    if _NotFound is not None and isinstance(e, _NotFound):
+                        # Expected: user is not in this guild — the silent path
+                        sender_member = None
+                    elif _Forbidden is not None and isinstance(e, _Forbidden):
+                        print(f"  [discord-state-escalate] fetch_member forbidden for sender {sender_id} in guild {ch_guild.id}: {e}", flush=True)
+                        sender_member = None
+                    elif _HTTPException is not None and isinstance(e, _HTTPException):
+                        print(f"  [discord-state-escalate] fetch_member http error for sender {sender_id} in guild {ch_guild.id}: {e}", flush=True)
+                        sender_member = None
+                    else:
+                        print(f"  [discord-state-escalate] fetch_member unexpected error for sender {sender_id} in guild {ch_guild.id}: {e}", flush=True)
+                        sender_member = None
+            if sender_member is None:
+                print(f"  [discord-state-escalate] sender {sender_id} not a member of guild {ch_guild.id}; not routing DM-referenced escalation", flush=True)
+                continue
+            target_guild_id = ch_guild.id
+            break
+
+    if target_guild_id is None:
+        print(f"  [discord-state-escalate] no target guild resolvable; staying silent (NO-REPLY)", flush=True)
+        return True
+
+    cfg = _load_mod_server_config(target_guild_id)
+    esc_ch_id = cfg.get("escalation_channel") if isinstance(cfg, dict) else None
+    if not esc_ch_id:
+        print(f"  [discord-state-escalate] guild {target_guild_id} has no escalation_channel; staying silent", flush=True)
+        return True
+
+    try:
+        esc_ch = client.get_channel(esc_ch_id)
+        if esc_ch is None:
+            esc_ch = await client.fetch_channel(esc_ch_id)
+    except Exception as e:
+        print(f"  [discord-state-escalate] failed to resolve escalation channel {esc_ch_id}: {e}", flush=True)
+        return True
+
+    if esc_ch is None:
+        return True
+
+    sender_id = getattr(message.author, "id", "?") if hasattr(message, "author") else "?"
+    origin_ch_id = getattr(message.channel, "id", "?") if hasattr(message, "channel") else "?"
+    body_lines = [
+        "**Sutando — task escalation**",
+        "",
+        f"Sender: <@{sender_id}>",
+        f"Origin: <#{origin_ch_id}>",
+        f"Referenced channel(s): {', '.join(f'<#{r}>' for r in refs)}",
+        "",
+        "Task body:",
+        "```",
+        (user_task_text or "")[:1500],
+        "```",
+        "",
+        ("This task references Discord-side state (channel content / message lookup) that the bot's "
+         "sandboxed processing path cannot access. A moderator can review and respond directly if appropriate."),
+    ]
+    cc_ids = []
+    if cfg.get("escalation_ccs"):
+        cc_ids = _extract_user_id_mentions(cfg["escalation_ccs"])
+    am = discord.AllowedMentions(everyone=False, roles=False, users=cc_ids)
+    try:
+        await esc_ch.send("\n".join(body_lines), allowed_mentions=am)
+        print(f"  [discord-state-escalate] posted to channel {esc_ch_id} for guild {target_guild_id}", flush=True)
+    except Exception as e:
+        print(f"  [discord-state-escalate] post failed: {e}", flush=True)
+    return True
+
+
 async def _post_mod_escalation(client_ref, suspect_message, rule_label, llm_rationale, extras_md=""):
     """Shared escalation post template. Used by Rules 1/2/3-violates/5/6.
 
@@ -812,7 +1027,7 @@ async def _post_mod_escalation(client_ref, suspect_message, rule_label, llm_rati
         # ONLY the explicit cc user-ids; suppress @everyone/@here/@role and
         # any user mentions not in the cc list.
         try:
-            cc_ids = [int(s.strip("<@>")) for s in cfg["escalation_ccs"] if s.startswith("<@") and s.endswith(">")]
+            cc_ids = _extract_user_id_mentions(cfg["escalation_ccs"])
         except Exception:
             cc_ids = []
         try:
@@ -1951,12 +2166,51 @@ async def _handle_discord_message(message, force=False):
     # See CLAUDE.md "Discord access control" section for the policy.
     user_task_text = f"[Discord @{username}] {text}{attachment_note}{reply_context}"
     quoted_task = shlex.quote(user_task_text)
+
+    # Pre-classify Discord-state-reference tasks (per msze_'s 2026-05-07
+    # directive + Chi's "ship 1" call). If the task body contains a
+    # channel-mention `<#1234>`, codex sandbox cannot read that channel's
+    # content; rather than letting the agent emit the cold "Sandbox
+    # unavailable" string publicly, the bridge silently escalates to the
+    # appropriate guild's escalation_channel and writes an "already_escalated"
+    # tier instruction telling the agent to NO-REPLY archive.
+    already_escalated = False
+    if access_tier in ("team", "other"):
+        try:
+            already_escalated = await _silent_escalate_for_discord_state(message, user_task_text)
+        except Exception as e:
+            # Per MacBook's #639 v4 review: fail-SILENT on unknown error in
+            # the escalate path. The previous fail-open default
+            # (already_escalated=False → run codex publicly) meant a broken
+            # escalation infra would leak the cold "Sandbox unavailable"
+            # string into public channels, which is exactly what msze_'s
+            # original directive said to avoid. Fail-silent matches the
+            # "don't surface internal errors publicly" intent.
+            print(f"  [discord-state-escalate] outer guard caught: {e}; fail-silent (NO-REPLY archive)", flush=True)
+            already_escalated = True
+
+    # When the bridge has already silently escalated, the agent has nothing to
+    # do — skip the task-file write entirely. Otherwise the task would land in
+    # `pending_replies` (line ~2080 below) but no `results/task-*.txt` would
+    # ever appear (the new `already_escalated` tier instruction is NO-REPLY),
+    # leaving the entry to age out via _recovery only. Skipping the write
+    # avoids the leak + avoids a spurious 👀 auto-react that signals "the bot
+    # is processing this." Per MacBook #639 review finding #2.
+    if already_escalated:
+        print(f"  [discord-state-escalate] silent escalation handled; no task file written for {username} in #{getattr(message.channel, 'name', '?')}", flush=True)
+        return
     # Absolute path for codex's `-o` flag. The team-tier command runs from
     # the bridge's cwd (the repo) so a relative `results/...` path would work,
     # but the other-tier command uses `-C /tmp` which would resolve a
     # relative `-o results/...` against `/tmp/results/` (does not exist) and
     # codex fails with `os error 2`. Reuse the module-level RESULTS_DIR so
     # both tier blocks are robust regardless of cwd.
+    # Note: the silent-escalate path (above) `return`s before this point when
+    # `already_escalated=True`, so the only valid keys consumed below are
+    # owner/team/other. (An earlier draft had an `already_escalated` tier
+    # instruction that told the agent to NO-REPLY archive, but that left the
+    # task in `pending_replies` until age-out — leak-prone per MacBook's #639
+    # review. Removed in favor of skipping the task-file write entirely.)
     tier_instructions = {
         "owner": "",
         "team": (
