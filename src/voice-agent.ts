@@ -102,6 +102,7 @@ const CALL_RESULTS_DIR = join(new URL('.', import.meta.url).pathname, '..', 'res
 // Model configuration — override via .env for cost/quality tuning
 const VOICE_MODEL = process.env.VOICE_MODEL || 'gemini-2.5-flash';
 const VOICE_NATIVE_AUDIO_MODEL = process.env.VOICE_NATIVE_AUDIO_MODEL || 'gemini-3.1-flash-live-preview';
+const VOICE_NAME = process.env.VOICE_NAME || 'Puck';
 // Google Search grounding — MUST be false under gemini-3.1-flash-live-preview
 // native audio. Combining googleSearch: true + 3.1 native audio causes the
 // transport to reject setup with close code 1011 "exceeded your current
@@ -818,7 +819,7 @@ async function main() {
 		host: HOST,
 		model: google(VOICE_MODEL),
 		geminiModel: VOICE_NATIVE_AUDIO_MODEL,
-		speechConfig: { voiceName: 'Puck' },
+		speechConfig: { voiceName: VOICE_NAME },
 		inputAudioTranscription: true,
 		hooks: {
 			onSessionStart: (e) => {
@@ -870,6 +871,17 @@ async function main() {
 
 	sessionRef = session;
 
+	// Bumped 5min into the future on every non-retryable transport close
+	// (set inside the classifier IIFE below). Read by the 30s health
+	// monitor — when the deadline is in the future, the monitor skips its
+	// reconnect-trigger so a permanent upstream failure (credits depleted,
+	// key invalid, quota exceeded) doesn't produce a tight 60s retry loop
+	// that spams logs + Gemini API requests until the user fixes things.
+	// Auto-recovery resumes ~5min after the last fatal close. Reset to 0
+	// when the session reaches ACTIVE so a transient close after recovery
+	// doesn't inherit a stale backoff window.
+	let voiceFatalBackoffUntil = 0;
+
 	// Wire voice-failure classifier: when the Gemini Live transport closes
 	// with a non-retryable reason (credits depleted, quota exceeded, key
 	// invalid, model not found), surface an actionable message via the
@@ -887,6 +899,12 @@ async function main() {
 		const notifiedCategories = new Set<string>();
 		const handleClose = (c: ClassifiedClose): void => {
 			if (c.retryable) return;
+			// Push the health-monitor reconnect window out by 5min on every
+			// non-retryable close — including repeats of an already-notified
+			// category — so the 60s retry loop doesn't keep firing while the
+			// upstream issue persists. Without this, a 1011 credit-depleted
+			// loop produces ~6 log lines / 60s indefinitely.
+			voiceFatalBackoffUntil = Date.now() + 5 * 60 * 1000;
 			if (notifiedCategories.has(c.category)) return;
 			notifiedCategories.add(c.category);
 			console.error(`${ts()} [VoiceFailure] ${c.category}: ${c.userMessage} (raw="${c.rawReason}")`);
@@ -1097,14 +1115,54 @@ async function main() {
 
 	voiceSessionRef = session;
 
+	// Idle teardown — close the upstream Gemini transport when no client has
+	// been connected for IDLE_TEARDOWN_MS. Without this, voice-agent keeps the
+	// Gemini Live session alive 24/7; every ~9-min Gemini reconnect ("GoAway")
+	// produces a phantom assistant turn (sometimes a tool call) with no user
+	// input. Symptoms observed: phantom save_meeting_note polluting markdown
+	// notes, phantom open_url opening browser tabs, phantom work tool calls
+	// writing fake task files. CLOSED state is a fixed point when
+	// clientConnected=false (the existing health monitor only reconnects
+	// CLOSED→CONNECTING when a client is present), so once we transition there
+	// no phantoms can fire until the next legitimate client reconnect.
+	// Tunable via env var per Mini's #602 review note. Defaults to 60s — sane
+	// for the voice / phone reconnect cadence we've observed; raise if a host
+	// has frequent ~70s connect/disconnect churn that re-opens too aggressively.
+	const IDLE_TEARDOWN_MS = Number(process.env.SUTANDO_VOICE_IDLE_TEARDOWN_MS) || 60_000;
+	let idleTeardownTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const cancelIdleTeardown = () => {
+		if (idleTeardownTimer) {
+			clearTimeout(idleTeardownTimer);
+			idleTeardownTimer = null;
+		}
+	};
+	const scheduleIdleTeardown = () => {
+		cancelIdleTeardown();
+		idleTeardownTimer = setTimeout(async () => {
+			idleTeardownTimer = null;
+			if ((session as any).clientConnected) return;
+			const transport = (session as any).transport;
+			if (!transport?.disconnect) return;
+			console.log(`${ts()} [VoiceSession] Idle ${IDLE_TEARDOWN_MS / 1000}s — closing Gemini transport (no phantoms while CLOSED)`);
+			try {
+				await transport.disconnect();
+			} catch (err) {
+				console.error(`${ts()} [VoiceSession] Idle teardown failed: ${(err as Error)?.message ?? err}`);
+			}
+		}, IDLE_TEARDOWN_MS);
+	};
+
 	// Flush metrics on client disconnect — bodhi's handleClientDisconnected()
-	// doesn't trigger onSessionEnd, so metrics would never be written.
+	// doesn't trigger onSessionEnd, so metrics would never be written. Also
+	// arms the idle-teardown timer (see above).
 	const origDisconnect = (session as any).handleClientDisconnected?.bind(session);
 	if (origDisconnect) {
 		(session as any).handleClientDisconnected = () => {
 			origDisconnect();
 			writeVoiceMetrics();
 			writeVoiceState(false);
+			scheduleIdleTeardown();
 		};
 	}
 
@@ -1119,11 +1177,12 @@ async function main() {
 	// jsonl because MBP kept one voice-agent process alive across many
 	// client reconnects. First connect still goes through bodhi's
 	// onSessionStart (our callback resets state there); this wrap only
-	// kicks in on the 2nd+ connect.
+	// kicks in on the 2nd+ connect. Also cancels any pending idle teardown.
 	let clientHasConnectedOnce = false;
 	const origConnect = (session as any).handleClientConnected?.bind(session);
 	if (origConnect) {
 		(session as any).handleClientConnected = () => {
+			cancelIdleTeardown();
 			if (clientHasConnectedOnce) {
 				userTurnCount = 0; userHasInterrupted = false; sessionEnding = false;
 				voiceSessionStart = Date.now(); metricsWritten = false;
@@ -1136,6 +1195,10 @@ async function main() {
 			origConnect();
 		};
 	}
+
+	// Arm the initial teardown — voice-agent boots with no client; if none
+	// connects within IDLE_TEARDOWN_MS, close the upstream transport.
+	scheduleIdleTeardown();
 
 	// Wire task status → web client
 	setTaskStatusCallback((taskId, status, text, result) => {
@@ -1210,11 +1273,18 @@ async function main() {
 			console.log(`${ts()} [Health] ${status}`);
 			lastLoggedStatus = status;
 		}
+		// Clear any stale fatal-backoff once we observe a healthy session —
+		// otherwise a brief outage that triggered a backoff would suppress
+		// recovery from a later transient close even after the upstream
+		// issue was fixed.
+		if (state === 'ACTIVE' && voiceFatalBackoffUntil > 0) {
+			voiceFatalBackoffUntil = 0;
+		}
 		// Recover when session is CLOSED and a client is waiting. handleClientConnected
 		// is bodhi's internal entry point for this exact scenario (CLOSED + client
 		// present → transition to CONNECTING, reconnect fire-and-forget).
 		// TODO: drop the (session as any) cast once bodhi exposes a public API.
-		if (state === 'CLOSED' && clientConnected && Date.now() - lastReconnectAt > 60_000) {
+		if (state === 'CLOSED' && clientConnected && Date.now() - lastReconnectAt > 60_000 && Date.now() > voiceFatalBackoffUntil) {
 			lastReconnectAt = Date.now();
 			console.log(`${ts()} [Health] Dead session — triggering reconnect`);
 			try {
@@ -1234,6 +1304,7 @@ async function main() {
 	console.log(`  Models:`);
 	console.log(`    Voice LLM:       ${VOICE_MODEL}`);
 	console.log(`    Native audio:    ${VOICE_NATIVE_AUDIO_MODEL}`);
+	console.log(`    Voice name:      ${VOICE_NAME}`);
 	console.log(`    STT:             native Gemini Live inputAudioTranscription`);
 	console.log(`    Cartesia TTS:    ${CARTESIA_API_KEY ? 'sonic-3' : 'disabled'}`);
 	console.log();
